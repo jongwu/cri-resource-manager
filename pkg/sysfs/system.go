@@ -60,6 +60,7 @@ type System interface {
 	SetCPUFrequencyLimits(min, max uint64, cpus idset.IDSet) error
 	PackageIDs() []idset.ID
 	NodeIDs() []idset.ID
+  CcxIDs() []idset.ID
 	CPUIDs() []idset.ID
 	PackageCount() int
 	SocketCount() int
@@ -69,6 +70,7 @@ type System interface {
 	CPUSet() cpuset.CPUSet
 	Package(id idset.ID) CPUPackage
 	Node(id idset.ID) Node
+  Ccx(id idset.ID) Ccx
 	NodeDistance(from, to idset.ID) int
 	CPU(id idset.ID) CPU
 	Offlined() cpuset.CPUSet
@@ -81,6 +83,7 @@ type system struct {
 	path          string                   // sysfs mount point
 	packages      map[idset.ID]*cpuPackage // physical packages
 	nodes         map[idset.ID]*node       // NUMA nodes
+  ccxs          map[idset.ID]*ccx        // CCXs
 	cpus          map[idset.ID]*cpu        // CPUs
 	cache         map[idset.ID]*Cache      // Cache
 	offline       idset.IDSet              // offlined CPUs
@@ -114,6 +117,7 @@ type Node interface {
 	ID() idset.ID
 	PackageID() idset.ID
 	DieID() idset.ID
+  CcxSet() idset.IDSet
 	CPUSet() cpuset.CPUSet
 	Distance() []int
 	DistanceFrom(id idset.ID) int
@@ -127,10 +131,29 @@ type node struct {
 	id         idset.ID    // node id
 	pkg        idset.ID    // package id
 	die        idset.ID    // die id
+  ccxs       idset.IDSet // ccxs in this node
 	cpus       idset.IDSet // cpus in this node
 	memoryType MemoryType  // node memory type
 	normalMem  bool        // node has memory in a normal (kernel space allocatable) zone
 	distance   []int       // distance/cost to other NUMA nodes
+}
+
+// CCX
+type Ccx interface {
+  ID() idset.ID
+  PackageID() idset.ID
+  DieID() idset.ID
+  NodeID() idset.ID
+  CPUSet() cpuset.CPUSet
+}
+
+type ccx struct {
+  id      idset.ID
+  pkg     idset.ID
+  die     idset.ID
+  node    idset.ID
+  cpus    idset.IDSet
+  cpulist []int
 }
 
 // CPU is a CPU core.
@@ -139,6 +162,7 @@ type CPU interface {
 	PackageID() idset.ID
 	DieID() idset.ID
 	NodeID() idset.ID
+  CcxID()  idset.ID
 	CoreID() idset.ID
 	ThreadCPUSet() cpuset.CPUSet
 	BaseFrequency() uint64
@@ -156,6 +180,7 @@ type cpu struct {
 	pkg      idset.ID    // package id
 	die      idset.ID    // die id
 	node     idset.ID    // node id
+  ccx      idset.ID    // ccx id
 	core     idset.ID    // core id
 	threads  idset.IDSet // sibling/hyper-threads
 	baseFreq uint64      // CPU base frequency
@@ -252,6 +277,9 @@ func (sys *system) Discover() error {
 	if err := sys.discoverCPUs(); err != nil {
 		return err
 	}
+  if err := sys.discoverCCXs(); err != nil {
+    return err
+  }
 	if err := sys.discoverNodes(); err != nil {
 		return err
 	}
@@ -310,6 +338,7 @@ func (sys *system) Discover() error {
 			sys.Debug("        pkg: %d", cpu.pkg)
 			sys.Debug("        die: %d", cpu.die)
 			sys.Debug("       node: %d", cpu.node)
+			sys.Debug("       ccx: %d", cpu.ccx)
 			sys.Debug("       core: %d", cpu.core)
 			sys.Debug("    threads: %s", cpu.threads)
 			sys.Debug("  base freq: %d", cpu.baseFreq)
@@ -426,6 +455,22 @@ func (sys *system) NodeIDs() []idset.ID {
 	return ids
 }
 
+// CcxIDs get the ids of all CCX nodes present in the system.
+func (sys *system) CcxIDs() []idset.ID {
+  ids := make([]idset.ID, len(sys.ccxs))
+  idx := 0
+  for id := range sys.ccxs {
+    ids[idx] = id
+    idx++
+  }
+
+  sort.Slice(ids, func(i, j int) bool {
+    return int(ids[i]) < int(ids[j])
+  })
+
+  return ids
+}
+
 // CPUIDs gets the ids of all CPUs present in the system.
 func (sys *system) CPUIDs() []idset.ID {
 	ids := make([]idset.ID, len(sys.cpus))
@@ -489,6 +534,11 @@ func (sys *system) Node(id idset.ID) Node {
 // NodeDistance gets the distance between two NUMA nodes.
 func (sys *system) NodeDistance(from, to idset.ID) int {
 	return sys.nodes[from].DistanceFrom(to)
+}
+
+// Ccx gets the ccx with a given ccx id.
+func (sys *system) Ccx(id idset.ID) Ccx {
+  return sys.ccxs[id]
 }
 
 // CPU gets the CPU with a given CPU id.
@@ -571,7 +621,9 @@ func (sys *system) discoverCPU(path string) error {
 	} else {
 		return fmt.Errorf("exactly one node per cpu allowed")
 	}
-
+  if _, err := readSysfsEntry(path, "cache/index3/id", &cpu.ccx); err != nil {
+    cpu.ccx = 0
+  }
 	if sys.threads < 1 {
 		sys.threads = 1
 	}
@@ -602,6 +654,11 @@ func (c *cpu) DieID() idset.ID {
 // NodeID returns the node id of this CPU.
 func (c *cpu) NodeID() idset.ID {
 	return c.node
+}
+
+// CcxID return the ccx id of this CPU
+func (c *cpu) CcxID() idset.ID {
+  return c.ccx
 }
 
 // CoreID returns the core id of this CPU (lowest CPU id of all thread siblings).
@@ -687,6 +744,68 @@ func readCPUsetFile(base, entry string) (cpuset.CPUSet, error) {
 	return cpuset.Parse(strings.Trim(string(blob), "\n"))
 }
 
+// Discover CCX
+func (sys *system) discoverCCXs() error {
+  if sys.ccxs != nil {
+    return nil
+  }
+
+  sysCpusPath := filepath.Join(sys.path, sysfsCPUPath)
+  sys.ccxs = make(map[int]*ccx)
+  entries, _ := filepath.Glob(filepath.Join(sysCpusPath, "cpu[0-9]*"))
+  for _, entry := range entries {
+    if err := sys.discoverCCX(entry); err != nil {
+      return fmt.Errorf("failed to discover ccx for entry %s: %v", entry, err)
+    }
+  }
+
+  for _, ccx := range sys.ccxs {
+    ccx.cpus = idset.NewIDSetFromIntSlice(ccx.cpulist...)
+  }
+  return nil
+}
+
+// Discover CCX inside one cpu
+func (sys *system) discoverCCX(path string) error {
+  cpuId := getEnumeratedID(path)
+
+  var cacheId string
+  if _, err := readSysfsEntry(path, "/cache/index3/id", &cacheId); err != nil {
+    return err
+  }
+  var l3CacheId int
+  if id, err := strconv.Atoi(cacheId); err != nil {
+    return err
+  } else {
+    l3CacheId = id
+  }
+  var firstNumIdx int
+  for firstNumIdx = len(path) - 1; firstNumIdx > 0; firstNumIdx-- {
+    if path[firstNumIdx] > '9' || path[firstNumIdx] < '0' {
+      firstNumIdx++
+      break
+    }
+  }
+  if firstNumIdx >= len(path) {
+    return fmt.Errorf("failed to get cpuId")
+  }
+  cpuNum := path[firstNumIdx:]
+  id := idset.ID(l3CacheId)
+  var cpu int
+  if c, err := strconv.Atoi(cpuNum); err != nil {
+    return err
+  } else {
+    cpu = c
+  }
+  if sys.ccxs[id] == nil {
+    ccx := &ccx{id: id, pkg: sys.cpus[cpuId].pkg, die: sys.cpus[cpuId].die, node: sys.cpus[cpuId].node}
+    sys.ccxs[id] = ccx
+    sys.cpus[cpuId].ccx = id
+  }
+  sys.ccxs[id].cpulist = append(sys.ccxs[id].cpulist, cpu)
+
+  return nil
+}
 // Discover NUMA nodes present in the system.
 func (sys *system) discoverNodes() error {
 	if sys.nodes != nil {
@@ -804,6 +923,17 @@ func (sys *system) discoverNode(path string) error {
 	}
 
 	sys.nodes[node.id] = node
+  last := idset.ID(-1)
+  for id, _ := range node.cpus {
+    if len(node.ccxs) == 0 {
+      node.ccxs = idset.NewIDSet(sys.cpus[id].ccx)
+    }
+
+    if last != id {
+      node.ccxs.Add(sys.cpus[id].ccx)
+      last = id
+    }
+  }
 
 	return nil
 }
@@ -821,6 +951,11 @@ func (n *node) PackageID() idset.ID {
 // DieID returns the die id for this node.
 func (n *node) DieID() idset.ID {
 	return n.die
+}
+
+// CcxSet returns the ccxs for this node.
+func (n *node) CcxSet() idset.IDSet {
+  return n.ccxs
 }
 
 // CPUSet returns the CPUSet for all cores/threads in this node.
@@ -896,6 +1031,31 @@ func (n *node) GetMemoryType() MemoryType {
 // HasNormalMemory returns true if the node has memory that belongs to a normal zone.
 func (n *node) HasNormalMemory() bool {
 	return n.normalMem
+}
+
+// implement Ccx for ccx
+func (c *ccx) ID() idset.ID {
+  return c.id
+}
+
+// PackageID returns the package id for this ccx.
+func (c *ccx) PackageID() idset.ID {
+  return c.pkg
+}
+
+// DieID returns the die id for this ccx.
+func (c *ccx) DieID() idset.ID {
+  return c.die
+}
+
+// NodeID return the numa id for this ccx.
+func (c *ccx) NodeID() idset.ID {
+  return c.node
+}
+
+// CPUSet returns the CPUSet for all cores/threads in this ccx.
+func (c *ccx) CPUSet() cpuset.CPUSet {
+  return CPUSetFromIDSet(c.cpus)
 }
 
 // Discover physical packages (CPU sockets) present in the system.
