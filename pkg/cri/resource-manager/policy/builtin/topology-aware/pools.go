@@ -157,6 +157,14 @@ func (p *policy) buildPoolsByTopology() error {
 		log.Debug("        + created pool %q", numaNode.Parent().Name()+"/"+numaNode.Name())
 	}
 
+  // add CCX to node map
+  for _, ccxId := range p.sys.CcxIDs() {
+   numaId := p.sys.Ccx(ccxId).NodeID()
+   numaNode := numaSurrogates[numaId]
+   ccxNode := p.NewCcxNode(ccxId, numaNode)
+   p.nodes[ccxNode.Name()] = ccxNode
+  }
+
 	// set up assignment of PMEM and DRAM node resources to pool nodes and surrogates
 	assigned := p.assignNUMANodes(numaSurrogates, pmemNodes, dramNodes)
 	log.Debug("NUMA node to pool assignment:")
