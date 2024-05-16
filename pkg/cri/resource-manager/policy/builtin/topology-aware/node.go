@@ -47,6 +47,8 @@ const (
 	DieNode NodeKind = "die"
 	// NumaNode represents a NUMA node in the system.
 	NumaNode NodeKind = "numa node"
+	// CcxNode represents a ccx in the system
+	CcxNode NodeKind = "ccx"
 	// VirtualNode represents a virtual node, currently the root multi-socket setups.
 	VirtualNode NodeKind = "virtual node"
 )
@@ -160,6 +162,13 @@ type numanode struct {
 	node                // common node data
 	id      idset.ID    // NUMA node system id
 	sysnode system.Node // corresponding system.Node
+}
+
+// ccxnode represents a CCX in the system
+type ccxnode struct {
+	node              // common node data
+	id     idset.ID   // CCX system id
+	sysccx system.Ccx // corresponding system.Ccx
 }
 
 // virtualnode represents a virtual node (ATM only the root in a multi-socket system).
@@ -380,13 +389,36 @@ func (n *node) DiscoverSupply(assignedNUMANodes []idset.ID) Supply {
 	return n.self.node.DiscoverSupply(assignedNUMANodes)
 }
 
+// Get the trailing enumeration part of a name.
+func getEnumeratedID(name string) idset.ID {
+  id := 0
+  base := 1
+  for idx := len(name) - 1; idx > 0; idx-- {
+    d := name[idx]
+
+    if '0' <= d && d <= '9' {
+      id += base * (int(d) - '0')
+      base *= 10
+    } else {
+      if base > 1 {
+        return idset.ID(id)
+      }
+
+      return idset.ID(-1)
+    }
+  }
+
+  return idset.ID(-1)
+}
+
 // discoverSupply discovers the resource supply assigned to this pool node.
 func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
+	log.Info("discoverSupply for %s, id: %d, assignedNUMANodes: %v", n.Name(), n.id, assignedNUMANodes)
 	if n.noderes != nil {
 		return n.noderes.Clone()
 	}
 
-	if !n.IsLeafNode() {
+	if !n.IsLeafNode() && n.kind != NumaNode {
 		log.Debug("%s: cumulating child resources...", n.Name())
 
 		if len(assignedNUMANodes) > 0 {
@@ -404,8 +436,9 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 			log.Debug("  + %s", supply.DumpCapacity())
 		}
 		log.Debug("  = %s", n.noderes.DumpCapacity())
-	} else {
-		log.Debug("%s: discovering attached/assigned resources...", n.Name())
+	} else if n.kind == NumaNode {
+		log.Info("%s: discovering attached/assigned resources...", n.Name())
+		//		log.Debug("%s: discovering attached/assigned resources...", n.Name())
 
 		mmap := createMemoryMap(0, 0, 0)
 		cpus := cpuset.New()
@@ -418,7 +451,6 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 			if err != nil {
 				log.Fatal("%s: failed to get memory info for NUMA node #%d", n.Name(), nodeID)
 			}
-
 			switch node.GetMemoryType() {
 			case system.MemoryTypeDRAM:
 				n.mem.Add(nodeID)
@@ -463,6 +495,36 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 		sharable := cpus.Difference(isolated).Difference(reserved)
 		n.noderes = newSupply(n, isolated, reserved, sharable, 0, 0, mmap, nil)
 		log.Debug("  = %s", n.noderes.DumpCapacity())
+	} else {
+		log.Info("discoverSupply: go into CCX branch")
+		cpus := cpuset.New()
+		mmap := createMemoryMap(0, 0, 0)
+    ccxId := getEnumeratedID(n.Name())
+
+			log.Info("discoverSupply: in ccxs loop: ccxid: %d", ccxId)
+			ccx := n.System().Ccx(ccxId)
+			nodeCPUs := ccx.CPUSet()
+			allowed := nodeCPUs.Intersection(n.policy.allowed)
+			isolated := allowed.Intersection(n.policy.isolated)
+			reserved := allowed.Intersection(n.policy.reserved).Difference(isolated)
+			sharable := allowed.Difference(isolated).Difference(reserved)
+			if !reserved.IsEmpty() {
+				log.Debug("    allowed reserved CPUs: %s", cpuset.ShortCPUSet(reserved))
+			}
+			if !sharable.IsEmpty() {
+				log.Debug("    allowed sharable CPUs: %s", cpuset.ShortCPUSet(sharable))
+			}
+			if !isolated.IsEmpty() {
+				log.Debug("    allowed isolated CPUs: %s", cpuset.ShortCPUSet(isolated))
+			}
+
+			cpus = cpus.Union(allowed)
+
+/*		isolated := cpus.Intersection(n.policy.isolated)
+		reserved := cpus.Intersection(n.policy.reserved).Difference(isolated)
+		sharable := cpus.Difference(isolated).Difference(reserved)
+*/		n.noderes = newSupply(n, isolated, reserved, sharable, 0, 0, mmap, nil)
+		log.Debug("  = %s", n.noderes.DumpCapacity())
 	}
 
 	n.freeres = n.noderes.Clone()
@@ -479,6 +541,10 @@ func (n *node) GetMemset(mtype memoryType) idset.IDSet {
 	if n.self.node == nil { // protect against &node{}-abuse by test cases...
 		return idset.NewIDSet()
 	}
+  if n.kind == CcxNode {
+    return n.parent.GetMemset(mtype)
+  }
+
 	return n.self.node.GetMemset(mtype)
 }
 
@@ -655,6 +721,41 @@ func (n *numanode) HintScore(hint topology.Hint) float64 {
 		return score
 	}
 
+	return 0.0
+}
+
+// NewCcxNode create a ccx for a numa node
+func (p *policy) NewCcxNode(id idset.ID, parent Node) Node {
+	n := &ccxnode{}
+	n.self.node = n
+	n.node.init(p, fmt.Sprintf("CCX node #%v", id), CcxNode, parent)
+	n.id = id
+	n.sysccx = p.sys.Ccx(id)
+
+	return n
+}
+
+// Dump (the NUMA-specific parts of) this node.
+func (n *ccxnode) dump(prefix string, level ...int) {
+	log.Debug("%s<NUMA node #%v>", indent(prefix, level...), n.id)
+}
+
+// Get CPU supply available at this node.
+func (n *ccxnode) GetSupply() Supply {
+	return n.noderes.Clone()
+}
+
+func (n *ccxnode) GetPhysicalNodeIDs() []idset.ID {
+	return []idset.ID{n.id}
+}
+
+// DiscoverSupply discovers the CPU supply available at this node.
+func (n *ccxnode) DiscoverSupply(assignedCCXNodes []idset.ID) Supply {
+	return n.node.discoverSupply(assignedCCXNodes)
+}
+
+// HintScore calculates the (CPU) score of the node for the given topology hint.
+func (n *ccxnode) HintScore(hint topology.Hint) float64 {
 	return 0.0
 }
 
