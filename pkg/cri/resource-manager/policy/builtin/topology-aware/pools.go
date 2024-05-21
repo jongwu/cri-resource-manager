@@ -401,8 +401,19 @@ func (p *policy) allocatePool(container cache.Container, poolHint string) (Grant
 	supply := pool.FreeSupply()
 	grant, err := supply.Allocate(request)
 	if err != nil {
-		return nil, policyError("failed to allocate %s from %s: %v",
-			request, supply.DumpAllocatable(), err)
+    log.Warn("failed to allocate %s from %s: %v, use all of our resources at this node to allocate",
+      request, supply.DumpAllocatable(), err)
+    return nil, nil
+    /* what I want to do here is that get all of our resource including the reserved cpus to do the grant.
+       but it seems the following code can't achive it, so leave it here and comment it out and fix it later
+    */
+    /*
+    supply = pool.GetSupply()
+    grant, err = supply.Allocate(request)
+    if err != nil {
+		  return nil, policyError("failed to allocate %s from %s: %v",
+			  request, supply.DumpCapacity(), err)
+    } */
 	}
 
 	log.Debug("allocated req '%s' to memory node '%s' (memset %s,%s,%s)",
@@ -886,10 +897,10 @@ func (p *policy) compareScores(request Request, pools []Node, scores map[int]Sco
 
 	// 1) a node with insufficient isolated or shared capacity loses
 	switch {
-	case cpuType == cpuNormal && ((isolated2 < 0 && isolated1 >= 0) || (shared2 < 0 && shared1 >= 0)):
+	case cpuType == cpuNormal && ((isolated2 < 0 && isolated1 >= 0) || (shared2 < 0 && shared1 >= 0) || (shared2 < 0 && shared1 < 0 && shared1 > shared2)):
 		log.Debug("  => %s loses, insufficent isolated or shared", node2.Name())
 		return true
-	case cpuType == cpuNormal && ((isolated1 < 0 && isolated2 >= 0) || (shared1 < 0 && shared2 >= 0)):
+	case cpuType == cpuNormal && ((isolated1 < 0 && isolated2 >= 0) || (shared1 < 0 && shared2 >= 0) || (shared1 < 0 && shared2 < 0 && shared1 < shared2)):
 		log.Debug("  => %s loses, insufficent isolated or shared", node1.Name())
 		return false
 	case cpuType == cpuReserved && reserved2 < 0 && reserved1 >= 0:
