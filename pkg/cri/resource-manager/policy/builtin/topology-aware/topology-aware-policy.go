@@ -166,6 +166,9 @@ func (p *policy) AllocateResources(container cache.Container) error {
 		return policyError("failed to allocate resources for %s: %v",
 			container.PrettyName(), err)
 	}
+  if grant == nil {
+    return nil
+  }
 	p.applyGrant(grant)
 	p.updateSharedAllocations(&grant)
 
