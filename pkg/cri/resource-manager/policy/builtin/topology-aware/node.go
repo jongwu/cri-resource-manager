@@ -391,24 +391,24 @@ func (n *node) DiscoverSupply(assignedNUMANodes []idset.ID) Supply {
 
 // Get the trailing enumeration part of a name.
 func getEnumeratedID(name string) idset.ID {
-  id := 0
-  base := 1
-  for idx := len(name) - 1; idx > 0; idx-- {
-    d := name[idx]
+	id := 0
+	base := 1
+	for idx := len(name) - 1; idx > 0; idx-- {
+		d := name[idx]
 
-    if '0' <= d && d <= '9' {
-      id += base * (int(d) - '0')
-      base *= 10
-    } else {
-      if base > 1 {
-        return idset.ID(id)
-      }
+		if '0' <= d && d <= '9' {
+			id += base * (int(d) - '0')
+			base *= 10
+		} else {
+			if base > 1 {
+				return idset.ID(id)
+			}
 
-      return idset.ID(-1)
-    }
-  }
+			return idset.ID(-1)
+		}
+	}
 
-  return idset.ID(-1)
+	return idset.ID(-1)
 }
 
 // discoverSupply discovers the resource supply assigned to this pool node.
@@ -418,7 +418,8 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 		return n.noderes.Clone()
 	}
 
-	if !n.IsLeafNode() && n.kind != NumaNode {
+	singleNumaSocket := len(n.children) == 1 && n.children[0].Kind() == NumaNode || len(n.children) > 0 && n.children[0].Kind() == CcxNode
+	if !n.IsLeafNode() && n.kind != NumaNode && !singleNumaSocket {
 		log.Debug("%s: cumulating child resources...", n.Name())
 
 		if len(assignedNUMANodes) > 0 {
@@ -436,9 +437,8 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 			log.Debug("  + %s", supply.DumpCapacity())
 		}
 		log.Debug("  = %s", n.noderes.DumpCapacity())
-	} else if n.kind == NumaNode {
+	} else if n.kind != CcxNode {
 		log.Info("%s: discovering attached/assigned resources...", n.Name())
-		//		log.Debug("%s: discovering attached/assigned resources...", n.Name())
 
 		mmap := createMemoryMap(0, 0, 0)
 		cpus := cpuset.New()
@@ -496,34 +496,29 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 		n.noderes = newSupply(n, isolated, reserved, sharable, 0, 0, mmap, nil)
 		log.Debug("  = %s", n.noderes.DumpCapacity())
 	} else {
-		log.Info("discoverSupply: go into CCX branch")
 		cpus := cpuset.New()
 		mmap := createMemoryMap(0, 0, 0)
-    ccxId := getEnumeratedID(n.Name())
+		ccxId := getEnumeratedID(n.Name())
 
-			log.Info("discoverSupply: in ccxs loop: ccxid: %d", ccxId)
-			ccx := n.System().Ccx(ccxId)
-			nodeCPUs := ccx.CPUSet()
-			allowed := nodeCPUs.Intersection(n.policy.allowed)
-			isolated := allowed.Intersection(n.policy.isolated)
-			reserved := allowed.Intersection(n.policy.reserved).Difference(isolated)
-			sharable := allowed.Difference(isolated).Difference(reserved)
-			if !reserved.IsEmpty() {
-				log.Debug("    allowed reserved CPUs: %s", cpuset.ShortCPUSet(reserved))
-			}
-			if !sharable.IsEmpty() {
-				log.Debug("    allowed sharable CPUs: %s", cpuset.ShortCPUSet(sharable))
-			}
-			if !isolated.IsEmpty() {
-				log.Debug("    allowed isolated CPUs: %s", cpuset.ShortCPUSet(isolated))
-			}
+		ccx := n.System().Ccx(ccxId)
+		nodeCPUs := ccx.CPUSet()
+		allowed := nodeCPUs.Intersection(n.policy.allowed)
+		isolated := allowed.Intersection(n.policy.isolated)
+		reserved := allowed.Intersection(n.policy.reserved).Difference(isolated)
+		sharable := allowed.Difference(isolated).Difference(reserved)
+		if !reserved.IsEmpty() {
+			log.Debug("    allowed reserved CPUs: %s", cpuset.ShortCPUSet(reserved))
+		}
+		if !sharable.IsEmpty() {
+			log.Debug("    allowed sharable CPUs: %s", cpuset.ShortCPUSet(sharable))
+		}
+		if !isolated.IsEmpty() {
+			log.Debug("    allowed isolated CPUs: %s", cpuset.ShortCPUSet(isolated))
+		}
 
-			cpus = cpus.Union(allowed)
+		cpus = cpus.Union(allowed)
 
-/*		isolated := cpus.Intersection(n.policy.isolated)
-		reserved := cpus.Intersection(n.policy.reserved).Difference(isolated)
-		sharable := cpus.Difference(isolated).Difference(reserved)
-*/		n.noderes = newSupply(n, isolated, reserved, sharable, 0, 0, mmap, nil)
+		n.noderes = newSupply(n, isolated, reserved, sharable, 0, 0, mmap, nil)
 		log.Debug("  = %s", n.noderes.DumpCapacity())
 	}
 
@@ -541,9 +536,9 @@ func (n *node) GetMemset(mtype memoryType) idset.IDSet {
 	if n.self.node == nil { // protect against &node{}-abuse by test cases...
 		return idset.NewIDSet()
 	}
-  if n.kind == CcxNode {
-    return n.parent.GetMemset(mtype)
-  }
+	if n.kind == CcxNode {
+		return n.parent.GetMemset(mtype)
+	}
 
 	return n.self.node.GetMemset(mtype)
 }
