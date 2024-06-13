@@ -315,16 +315,18 @@ func (n *node) Dump(prefix string, level ...int) {
 	if n.pMem.Size() > 0 {
 		log.Debug("%s  - PMEM memory: %v", idt, n.pMem)
 	}
-	for _, grant := range n.policy.allocations.grants {
-		cpuNodeID := grant.GetCPUNode().NodeID()
-		memNodeID := grant.GetMemoryNode().NodeID()
-		switch {
-		case cpuNodeID == n.id && memNodeID == n.id:
-			log.Debug("%s    + cpu+mem %s", idt, grant)
-		case cpuNodeID == n.id:
-			log.Debug("%s    + cpuonly %s", idt, grant)
-		case memNodeID == n.id:
-			log.Debug("%s    + memonly %s", idt, grant)
+	for _, grants := range n.policy.allocations.grants {
+		for _, grant := range grants {
+			cpuNodeID := grant.GetCPUNode().NodeID()
+			memNodeID := grant.GetMemoryNode().NodeID()
+			switch {
+			case cpuNodeID == n.id && memNodeID == n.id:
+				log.Debug("%s    + cpu+mem %s", idt, grant)
+			case cpuNodeID == n.id:
+				log.Debug("%s    + cpuonly %s", idt, grant)
+			case memNodeID == n.id:
+				log.Debug("%s    + memonly %s", idt, grant)
+			}
 		}
 	}
 	if !n.Parent().IsNil() {

@@ -59,33 +59,35 @@ func (p *policy) restoreAllocations(allocations *allocations) error {
 }
 
 // reinstateGrants tries to restore the given grants exactly as such.
-func (p *policy) reinstateGrants(grants map[string]Grant) error {
-	for id, grant := range grants {
-		c := grant.GetContainer()
+func (p *policy) reinstateGrants(grantss map[string][]Grant) error {
+	for id, grants := range grantss {
+		for _, grant := range grants {
+			c := grant.GetContainer()
 
-		pool := grant.GetCPUNode()
-		supply := pool.FreeSupply()
+			pool := grant.GetCPUNode()
+			supply := pool.FreeSupply()
 
-		if err := supply.Reserve(grant); err != nil {
-			return policyError("failed to update pool %q with CPU grant of %q: %v",
-				pool.Name(), c.PrettyName(), err)
+			if err := supply.Reserve(grant); err != nil {
+				return policyError("failed to update pool %q with CPU grant of %q: %v",
+					pool.Name(), c.PrettyName(), err)
+			}
+
+			log.Info("updated pool %q with reinstated CPU grant of %q",
+				pool.Name(), c.PrettyName())
+
+			pool = grant.GetMemoryNode()
+			if err := supply.ReserveMemory(grant); err != nil {
+				grant.GetCPUNode().FreeSupply().ReleaseCPU(grant)
+				return policyError("failed to update pool %q with extra memory of %q: %v",
+					pool.Name(), c.PrettyName(), err)
+			}
+
+			log.Info("updated pool %q with reinstanted memory reservation of %q",
+				pool.Name(), c.PrettyName())
+
+			p.allocations.grants[id] = append(p.allocations.grants[id], grant)
 		}
-
-		log.Info("updated pool %q with reinstated CPU grant of %q",
-			pool.Name(), c.PrettyName())
-
-		pool = grant.GetMemoryNode()
-		if err := supply.ReserveMemory(grant); err != nil {
-			grant.GetCPUNode().FreeSupply().ReleaseCPU(grant)
-			return policyError("failed to update pool %q with extra memory of %q: %v",
-				pool.Name(), c.PrettyName(), err)
-		}
-
-		log.Info("updated pool %q with reinstanted memory reservation of %q",
-			pool.Name(), c.PrettyName())
-
-		p.allocations.grants[id] = grant
-		p.applyGrant(grant)
+		p.applyGrant(grants)
 	}
 
 	p.updateSharedAllocations(nil)
@@ -173,30 +175,36 @@ func (cg *grant) UnmarshalJSON(data []byte) error {
 }
 
 func (a *allocations) MarshalJSON() ([]byte, error) {
-	cgrants := make(map[string]*cachedGrant)
+	cgrants := make(map[string][]*cachedGrant)
 	for id, cg := range a.grants {
-		cgrants[id] = newCachedGrant(cg)
+		for _, grant := range cg {
+			cgrants[id] = append(cgrants[id], newCachedGrant(grant))
+		}
 	}
 
 	return json.Marshal(cgrants)
 }
 
 func (a *allocations) UnmarshalJSON(data []byte) error {
-	var err error
-
-	cgrants := make(map[string]*cachedGrant)
+	cgrants := make(map[string][]*cachedGrant)
 	if err := json.Unmarshal(data, &cgrants); err != nil {
 		return policyError("failed to restore allocations: %v", err)
 	}
 
-	a.grants = make(map[string]Grant, 32)
-	for id, ccg := range cgrants {
-		a.grants[id], err = ccg.ToGrant(a.policy)
-		if err != nil {
-			log.Error("removing unresolvable cached grant %v: %v", *ccg, err)
-			delete(a.grants, id)
-		} else {
-			log.Debug("resolved cache grant: %v", a.grants[id].String())
+	a.grants = make(map[string][]Grant, 32)
+	for id, ccgs := range cgrants {
+		for _, ccg := range ccgs {
+			grant, err := ccg.ToGrant(a.policy)
+			if err != nil {
+				return err
+			}
+			a.grants[id] = append(a.grants[id], grant)
+			if err != nil {
+				log.Error("removing unresolvable cached grant %v: %v", *ccg, err)
+				delete(a.grants, id)
+			} else {
+				log.Debug("resolved cache grant: %v", a.grants[id])
+			}
 		}
 	}
 
@@ -218,7 +226,7 @@ func (a *allocations) Set(value interface{}) {
 		from = value.(*allocations)
 	}
 
-	a.grants = make(map[string]Grant, 32)
+	a.grants = make(map[string][]Grant, 32)
 	for id, cg := range from.grants {
 		a.grants[id] = cg
 	}

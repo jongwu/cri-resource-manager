@@ -53,7 +53,7 @@ const (
 // allocations is our cache.Cachable for saving resource allocations in the cache.
 type allocations struct {
 	policy *policy
-	grants map[string]Grant
+	grants map[string][]Grant
 }
 
 // policy is our runtime state for this policy.
@@ -161,28 +161,60 @@ func (p *policy) Sync(add []cache.Container, del []cache.Container) error {
 func (p *policy) AllocateResources(container cache.Container) error {
 	log.Debug("allocating resources for %s...", container.PrettyName())
 
-	grant, err := p.allocatePool(container, "")
-	if err != nil {
-		return policyError("failed to allocate resources for %s: %v",
-			container.PrettyName(), err)
-	}
-  if grant == nil {
-    return nil
-  }
-	p.applyGrant(grant)
-	p.updateSharedAllocations(&grant)
+	ccxCpuNum := p.sys.Ccx(0).CPUSet().Size()
+	numaCpuNum := p.sys.Node(0).CPUSet().Size()
 
-	p.root.Dump("<post-alloc>")
+	req := newRequest(container)
+	req0, req1 := resolveRequest(req, ccxCpuNum, numaCpuNum)
+
+	grant0, err := p.allocateResources(container, req0)
+	if err != nil {
+		return err
+	}
+	if grant0 == nil {
+		return nil
+	}
+
+	var grant1 Grant
+	if req1 != nil {
+		grant1, err = p.allocateResources(container, req1)
+		if err != nil {
+			return err
+		}
+	}
+
+	grants := []Grant{grant0}
+	if grant1 != nil {
+		grants = append(grants, grant1)
+	}
+
+	p.applyGrant(grants)
+	p.updateSharedAllocations(&grant0)
+	if grant1 != nil {
+		p.updateSharedAllocations(&grant1)
+	}
 
 	return nil
+}
+
+func (p *policy) allocateResources(container cache.Container, req Request) (Grant, error) {
+	grant, err := p.allocatePool(container, "", req)
+	if err != nil {
+		return nil, policyError("failed to allocate resources for %s: %v",
+			container.PrettyName(), err)
+	}
+
+	return grant, nil
 }
 
 // ReleaseResources is a resource release request for this policy.
 func (p *policy) ReleaseResources(container cache.Container) error {
 	log.Debug("releasing resources of %s...", container.PrettyName())
 
-	if grant, found := p.releasePool(container); found {
-		p.updateSharedAllocations(&grant)
+	if grants, found := p.releasePool(container); found {
+		for _, grant := range grants {
+			p.updateSharedAllocations(&grant)
+		}
 	}
 
 	p.root.Dump("<post-release>")
@@ -277,17 +309,19 @@ func (p *policy) Introspect(state *introspect.State) {
 	state.Pools = pools
 
 	assignments := make(map[string]*introspect.Assignment, len(p.allocations.grants))
-	for _, g := range p.allocations.grants {
-		a := &introspect.Assignment{
-			ContainerID:   g.GetContainer().GetID(),
-			CPUShare:      g.SharedPortion(),
-			ExclusiveCPUs: g.ExclusiveCPUs().Union(g.IsolatedCPUs()).String(),
-			Pool:          g.GetCPUNode().Name(),
+	for _, gs := range p.allocations.grants {
+		for _, g := range gs {
+			a := &introspect.Assignment{
+				ContainerID:   g.GetContainer().GetID(),
+				CPUShare:      g.SharedPortion(),
+				ExclusiveCPUs: g.ExclusiveCPUs().Union(g.IsolatedCPUs()).String(),
+				Pool:          g.GetCPUNode().Name(),
+			}
+			if g.SharedPortion() > 0 || a.ExclusiveCPUs == "" {
+				a.SharedCPUs = g.SharedCPUs().String()
+			}
+			assignments[a.ContainerID] = a
 		}
-		if g.SharedPortion() > 0 || a.ExclusiveCPUs == "" {
-			a.SharedCPUs = g.SharedCPUs().String()
-		}
-		assignments[a.ContainerID] = a
 	}
 	state.Assignments = assignments
 }
@@ -309,53 +343,56 @@ func (p *policy) CollectMetrics(policyapi.Metrics) ([]prometheus.Metric, error) 
 
 // ExportResourceData provides resource data to export for the container.
 func (p *policy) ExportResourceData(c cache.Container) map[string]string {
-	grant, ok := p.allocations.grants[c.GetCacheID()]
+	grants, ok := p.allocations.grants[c.GetCacheID()]
 	if !ok {
 		return nil
 	}
-
 	data := map[string]string{}
-	shared := grant.SharedCPUs().String()
-	isolated := grant.ExclusiveCPUs().Intersection(grant.GetCPUNode().GetSupply().IsolatedCPUs())
-	exclusive := grant.ExclusiveCPUs().Difference(isolated).String()
+	for _, grant := range grants {
 
-	if grant.SharedPortion() > 0 && shared != "" {
-		data[policyapi.ExportSharedCPUs] = shared
-	}
-	if isolated.String() != "" {
-		data[policyapi.ExportIsolatedCPUs] = isolated.String()
-	}
-	if exclusive != "" {
-		data[policyapi.ExportExclusiveCPUs] = exclusive
-	}
+		shared := grant.SharedCPUs().String()
+		isolated := grant.ExclusiveCPUs().Intersection(grant.GetCPUNode().GetSupply().IsolatedCPUs())
+		exclusive := grant.ExclusiveCPUs().Difference(isolated).String()
 
-	mems := grant.Memset()
-	dram := idset.NewIDSet()
-	pmem := idset.NewIDSet()
-	hbm := idset.NewIDSet()
-	for _, id := range mems.SortedMembers() {
-		node := p.sys.Node(id)
-		switch node.GetMemoryType() {
-		case system.MemoryTypeDRAM:
-			dram.Add(id)
-		case system.MemoryTypePMEM:
-			pmem.Add(id)
-			/*
-				case system.MemoryTypeHBM:
-					hbm.Add(id)
-			*/
+		if grant.SharedPortion() > 0 && shared != "" {
+			data[policyapi.ExportSharedCPUs] += shared
 		}
-	}
-	data["ALL_MEMS"] = mems.String()
-	if dram.Size() > 0 {
-		data["DRAM_MEMS"] = dram.String()
-	}
-	if pmem.Size() > 0 {
-		data["PMEM_MEMS"] = pmem.String()
-	}
-	if hbm.Size() > 0 {
-		data["HBM_MEMS"] = hbm.String()
-	}
+		if isolated.String() != "" {
+			data[policyapi.ExportIsolatedCPUs] += isolated.String()
+		}
+		if exclusive != "" {
+			data[policyapi.ExportExclusiveCPUs] += exclusive
+		}
+
+		mems := grant.Memset()
+		dram := idset.NewIDSet()
+		pmem := idset.NewIDSet()
+		hbm := idset.NewIDSet()
+		for _, id := range mems.SortedMembers() {
+			node := p.sys.Node(id)
+			switch node.GetMemoryType() {
+			case system.MemoryTypeDRAM:
+				dram.Add(id)
+			case system.MemoryTypePMEM:
+				pmem.Add(id)
+				/*
+					case system.MemoryTypeHBM:
+						hbm.Add(id)
+				*/
+			}
+		}
+		data["ALL_MEMS"] += mems.String()
+		if dram.Size() > 0 {
+			data["DRAM_MEMS"] += dram.String()
+		}
+		if pmem.Size() > 0 {
+			data["PMEM_MEMS"] += pmem.String()
+		}
+		if hbm.Size() > 0 {
+			data["HBM_MEMS"] += hbm.String()
+		}
+
+	} // for...range grants
 
 	return data
 }
@@ -374,11 +411,12 @@ func (p *policy) reallocateResources(containers []cache.Container, pools map[str
 	for _, c := range containers {
 		log.Debug("reallocating resources for %s...", c.PrettyName())
 
-		grant, err := p.allocatePool(c, pools[c.GetCacheID()])
+		grant, err := p.allocatePool(c, pools[c.GetCacheID()], nil)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
-			p.applyGrant(grant)
+			grants := []Grant{grant}
+			p.applyGrant(grants)
 		}
 	}
 
@@ -464,10 +502,12 @@ func (p *policy) configNotify(event config.Event, source config.Source) error {
 			return policyError("failed to reconfigure: %v", err)
 		}
 
-		for _, grant := range allocations.grants {
-			if err := grant.RefetchNodes(); err != nil {
-				*p = savedPolicy
-				return policyError("failed to reconfigure: %v", err)
+		for _, grants := range allocations.grants {
+			for _, grant := range grants {
+				if err := grant.RefetchNodes(); err != nil {
+					*p = savedPolicy
+					return policyError("failed to reconfigure: %v", err)
+				}
 			}
 		}
 
@@ -583,14 +623,18 @@ func (p *policy) checkColdstartOff() {
 
 // newAllocations returns a new initialized empty set of allocations.
 func (p *policy) newAllocations() allocations {
-	return allocations{policy: p, grants: make(map[string]Grant)}
+	return allocations{policy: p, grants: make(map[string][]Grant)}
 }
 
 // clone creates a copy of the allocation.
 func (a *allocations) clone() allocations {
-	o := allocations{policy: a.policy, grants: make(map[string]Grant)}
-	for id, grant := range a.grants {
-		o.grants[id] = grant.Clone()
+	o := allocations{policy: a.policy, grants: make(map[string][]Grant)}
+	gs := make([]Grant, len(a.grants))
+	for id, grants := range a.grants {
+		for i, grant := range grants {
+			gs[i] = grant.Clone()
+		}
+		o.grants[id] = gs
 	}
 	return o
 }
@@ -599,10 +643,12 @@ func (a *allocations) clone() allocations {
 func (a *allocations) getContainerPoolHints() ([]cache.Container, map[string]string) {
 	containers := make([]cache.Container, 0, len(a.grants))
 	hints := make(map[string]string)
-	for _, grant := range a.grants {
-		c := grant.GetContainer()
-		containers = append(containers, c)
-		hints[c.GetCacheID()] = grant.GetCPUNode().Name()
+	for _, grants := range a.grants {
+		for _, grant := range grants {
+			c := grant.GetContainer()
+			containers = append(containers, c)
+			hints[c.GetCacheID()] = grant.GetCPUNode().Name()
+		}
 	}
 	return containers, hints
 }

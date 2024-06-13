@@ -157,13 +157,13 @@ func (p *policy) buildPoolsByTopology() error {
 		log.Debug("        + created pool %q", numaNode.Parent().Name()+"/"+numaNode.Name())
 	}
 
-  // add CCX to node map
-  for _, ccxId := range p.sys.CcxIDs() {
-   numaId := p.sys.Ccx(ccxId).NodeID()
-   numaNode := numaSurrogates[numaId]
-   ccxNode := p.NewCcxNode(ccxId, numaNode)
-   p.nodes[ccxNode.Name()] = ccxNode
-  }
+	// add CCX to node map
+	for _, ccxId := range p.sys.CcxIDs() {
+		numaId := p.sys.Ccx(ccxId).NodeID()
+		numaNode := numaSurrogates[numaId]
+		ccxNode := p.NewCcxNode(ccxId, numaNode)
+		p.nodes[ccxNode.Name()] = ccxNode
+	}
 
 	// set up assignment of PMEM and DRAM node resources to pool nodes and surrogates
 	assigned := p.assignNUMANodes(numaSurrogates, pmemNodes, dramNodes)
@@ -340,10 +340,8 @@ func (p *policy) checkHWTopology() error {
 }
 
 // Pick a pool and allocate resource from it to the container.
-func (p *policy) allocatePool(container cache.Container, poolHint string) (Grant, error) {
+func (p *policy) allocatePool(container cache.Container, poolHint string, request Request) (Grant, error) {
 	var pool Node
-
-	request := newRequest(container)
 
 	if p.root.FreeSupply().ReservedCPUs().IsEmpty() && request.CPUType() == cpuReserved {
 		// Fallback to allocating reserved CPUs from the shared pool
@@ -401,19 +399,10 @@ func (p *policy) allocatePool(container cache.Container, poolHint string) (Grant
 	supply := pool.FreeSupply()
 	grant, err := supply.Allocate(request)
 	if err != nil {
-    log.Warn("failed to allocate %s from %s: %v, use all of our resources at this node to allocate",
-      request, supply.DumpAllocatable(), err)
-    return nil, nil
-    /* what I want to do here is that get all of our resource including the reserved cpus to do the grant.
-       but it seems the following code can't achive it, so leave it here and comment it out and fix it later
-    */
-    /*
-    supply = pool.GetSupply()
-    grant, err = supply.Allocate(request)
-    if err != nil {
-		  return nil, policyError("failed to allocate %s from %s: %v",
-			  request, supply.DumpCapacity(), err)
-    } */
+		// what I want to do here is that get all of our resource including the reserved cpus to do the grant.
+		log.Warn("failed to allocate %s from %s: %v, use all of our resources at this node to allocate",
+			request, supply.DumpAllocatable(), err)
+		return nil, nil
 	}
 
 	log.Debug("allocated req '%s' to memory node '%s' (memset %s,%s,%s)",
@@ -584,23 +573,25 @@ func (p *policy) allocatePool(container cache.Container, poolHint string) (Grant
 	changed := true
 	for changed {
 		changed = false
-		for _, oldGrant := range p.allocations.grants {
-			oldMemset := oldGrant.GetMemoryNode().GetMemset(grant.MemoryType())
-			if oldMemset.Size() < memset.Size() && memset.Has(oldMemset.Members()...) {
-				changed, err = oldGrant.ExpandMemset()
-				if err != nil {
-					return nil, err
-				}
-				if changed {
-					log.Debug("* moved container %s upward to node %s to guarantee memory",
-						oldGrant.GetContainer().PrettyName(), oldGrant.GetMemoryNode().Name())
-					break
+		for _, oldGrants := range p.allocations.grants {
+			for _, oldGrant := range oldGrants {
+				oldMemset := oldGrant.GetMemoryNode().GetMemset(grant.MemoryType())
+				if oldMemset.Size() < memset.Size() && memset.Has(oldMemset.Members()...) {
+					changed, err = oldGrant.ExpandMemset()
+					if err != nil {
+						return nil, err
+					}
+					if changed {
+						log.Debug("* moved container %s upward to node %s to guarantee memory",
+							oldGrant.GetContainer().PrettyName(), oldGrant.GetMemoryNode().Name())
+						break
+					}
 				}
 			}
 		}
 	}
 
-	p.allocations.grants[container.GetCacheID()] = grant
+	p.allocations.grants[container.GetCacheID()] = append(p.allocations.grants[container.GetCacheID()], grant)
 
 	p.saveAllocations()
 
@@ -608,15 +599,26 @@ func (p *policy) allocatePool(container cache.Container, poolHint string) (Grant
 }
 
 // Apply the result of allocation to the requesting container.
-func (p *policy) applyGrant(grant Grant) {
-	log.Debug("* applying grant %s", grant)
+func (p *policy) applyGrant(grants []Grant) {
+	if len(grants) == 0 || grants[0] == nil {
+		return
+	}
+	log.Debug("* applying grant")
+	var shared cpuset.CPUSet
+	var cset []int
+	cpuPortion := 0
 
-	container := grant.GetContainer()
-	cpuType := grant.CPUType()
-	exclusive := grant.ExclusiveCPUs()
-	reserved := grant.ReservedCPUs()
-	shared := grant.SharedCPUs()
-	cpuPortion := grant.SharedPortion()
+	container := grants[0].GetContainer()
+	cpuType := grants[0].CPUType()
+	exclusive := grants[0].ExclusiveCPUs()
+	reserved := grants[0].ReservedCPUs()
+
+	for _, grant := range grants {
+		cs := grant.SharedCPUs().List()
+		cset = append(cset, cs...)
+		cpuPortion += grant.SharedPortion()
+	}
+	shared = cpuset.New(cset...)
 
 	cpus := ""
 	kind := ""
@@ -636,7 +638,9 @@ func (p *policy) applyGrant(grant Grant) {
 	} else if cpuType == cpuReserved {
 		kind = "reserved"
 		cpus = reserved.String()
-		cpuPortion = grant.ReservedPortion()
+		for _, grant := range grants {
+			cpuPortion += grant.ReservedPortion()
+		}
 	} else {
 		log.Debug("unsupported granted cpuType %s", cpuType)
 		return
@@ -644,7 +648,12 @@ func (p *policy) applyGrant(grant Grant) {
 
 	mems := ""
 	if opt.PinMemory {
-		mems = grant.Memset().String()
+		for _, grant := range grants {
+			if mems != "" {
+				mems += ","
+			}
+			mems += grant.Memset().String()
+		}
 	}
 
 	if opt.PinCPU {
@@ -681,31 +690,33 @@ func (p *policy) applyGrant(grant Grant) {
 	if mems != "" {
 		log.Debug("  => pinning to memory %s", mems)
 		container.SetCpusetMems(mems)
-		p.setDemotionPreferences(container, grant)
+		p.setDemotionPreferences(container, grants[0]) // NEED FIX
 	} else {
 		log.Debug("  => not pinning memory, memory set is empty...")
 	}
 }
 
 // Release resources allocated by this grant.
-func (p *policy) releasePool(container cache.Container) (Grant, bool) {
+func (p *policy) releasePool(container cache.Container) ([]Grant, bool) {
 	log.Debug("* releasing resources allocated to %s", container.PrettyName())
 
-	grant, ok := p.allocations.grants[container.GetCacheID()]
-	if !ok {
-		log.Debug("  => no grant found, nothing to do...")
-		return nil, false
+	grants, ok := p.allocations.grants[container.GetCacheID()]
+	for _, grant := range grants {
+		if !ok {
+			log.Debug("  => no grant found, nothing to do...")
+			return nil, false
+		}
+
+		log.Debug("  => releasing grant %s...", grant)
+
+		// Remove the grant from all supplys it uses.
+		grant.Release()
 	}
-
-	log.Debug("  => releasing grant %s...", grant)
-
-	// Remove the grant from all supplys it uses.
-	grant.Release()
 
 	delete(p.allocations.grants, container.GetCacheID())
 	p.saveAllocations()
 
-	return grant, true
+	return grants, true
 }
 
 // Update shared allocations effected by agrant.
@@ -720,34 +731,36 @@ func (p *policy) updateSharedAllocations(grant *Grant) {
 		log.Debug("* updating shared allocations")
 	}
 
-	for _, other := range p.allocations.grants {
-		if grant != nil {
-			if other.GetContainer().GetCacheID() == (*grant).GetContainer().GetCacheID() {
+	for _, others := range p.allocations.grants {
+		for _, other := range others {
+			if grant != nil {
+				if other.GetContainer().GetCacheID() == (*grant).GetContainer().GetCacheID() {
+					continue
+				}
+			}
+
+			if other.CPUType() == cpuReserved {
+				log.Debug("  => %s not affected (only reserved CPUs)...", other)
 				continue
 			}
-		}
 
-		if other.CPUType() == cpuReserved {
-			log.Debug("  => %s not affected (only reserved CPUs)...", other)
-			continue
-		}
+			if other.SharedPortion() == 0 && !other.ExclusiveCPUs().IsEmpty() {
+				log.Debug("  => %s not affected (only exclusive CPUs)...", other)
+				continue
+			}
 
-		if other.SharedPortion() == 0 && !other.ExclusiveCPUs().IsEmpty() {
-			log.Debug("  => %s not affected (only exclusive CPUs)...", other)
-			continue
-		}
-
-		if opt.PinCPU {
-			shared := other.GetCPUNode().FreeSupply().SharableCPUs()
-			exclusive := other.ExclusiveCPUs()
-			if exclusive.IsEmpty() {
-				log.Debug("  => updating %s with shared CPUs of %s: %s...",
-					other, other.GetCPUNode().Name(), shared.String())
-				other.GetContainer().SetCpusetCpus(shared.String())
-			} else {
-				log.Debug("  => updating %s with exclusive+shared CPUs of %s: %s+%s...",
-					other, other.GetCPUNode().Name(), exclusive.String(), shared.String())
-				other.GetContainer().SetCpusetCpus(exclusive.Union(shared).String())
+			if opt.PinCPU {
+				shared := other.GetCPUNode().FreeSupply().SharableCPUs()
+				exclusive := other.ExclusiveCPUs()
+				if exclusive.IsEmpty() {
+					log.Debug("  => updating %s with shared CPUs of %s: %s...",
+						other, other.GetCPUNode().Name(), shared.String())
+					other.GetContainer().SetCpusetCpus(shared.String())
+				} else {
+					log.Debug("  => updating %s with exclusive+shared CPUs of %s: %s+%s...",
+						other, other.GetCPUNode().Name(), exclusive.String(), shared.String())
+					other.GetContainer().SetCpusetCpus(exclusive.Union(shared).String())
+				}
 			}
 		}
 	}
@@ -755,8 +768,10 @@ func (p *policy) updateSharedAllocations(grant *Grant) {
 
 // setDemotionPreferences sets the dynamic demotion preferences a container.
 func (p *policy) setDemotionPreferences(c cache.Container, g Grant) {
-	log.Debug("%s: setting demotion preferences...", c.PrettyName())
+	var dram idset.IDSet
+	var pmem idset.IDSet
 
+	log.Debug("%s: setting demotion preferences...", c.PrettyName())
 	// System containers should not be demoted.
 	if c.GetNamespace() == kubernetes.NamespaceSystem {
 		c.SetPageMigration(nil)
@@ -769,8 +784,10 @@ func (p *policy) setDemotionPreferences(c cache.Container, g Grant) {
 		return
 	}
 
-	dram := g.GetMemoryNode().GetMemset(memoryDRAM)
-	pmem := g.GetMemoryNode().GetMemset(memoryPMEM)
+	tmpdram := g.GetMemoryNode().GetMemset(memoryDRAM).Members()
+	dram.Add(tmpdram...)
+	tmppmem := g.GetMemoryNode().GetMemset(memoryPMEM).Members()
+	pmem.Add(tmppmem...)
 
 	log.Debug("%s: eligible for demotion from %s to %s NUMA node(s)",
 		c.PrettyName(), dram, pmem)

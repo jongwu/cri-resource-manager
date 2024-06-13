@@ -99,6 +99,8 @@ type Request interface {
 	SetCPUType(cpuType cpuClass)
 	// FullCPUs return the number of full CPUs requested.
 	FullCPUs() int
+	SetFullCPUs(int)
+	SetCPUFraction(int)
 	// CPUFraction returns the amount of fractional milli-CPU requested.
 	CPUFraction() int
 	// Isolate returns whether isolated CPUs are preferred for this request.
@@ -143,6 +145,7 @@ type Grant interface {
 	SharedCPUs() cpuset.CPUSet
 	// SharedPortion returns the amount of CPUs in milli-CPU granted.
 	SharedPortion() int
+	SetSharedPortion(int)
 	// IsolatedCpus returns the exclusively granted isolated cpuset.
 	IsolatedCPUs() cpuset.CPUSet
 	// MemoryType returns the type(s) of granted memory.
@@ -151,6 +154,7 @@ type Grant interface {
 	SetMemoryNode(Node)
 	// Memset returns the granted memory controllers as a string.
 	Memset() idset.IDSet
+	SetMemset(idset.IDSet)
 	// ExpandMemset() makes the memory controller set larger as the grant
 	// is moved up in the node hierarchy.
 	ExpandMemset() (bool, error)
@@ -939,6 +943,36 @@ func (cs *supply) DumpMemoryState(prefix string) {
 	}
 }
 
+// resolveResource resolve cpu resource to 2 parts if necessary
+func resolveRequest(req Request, ccxCpuNum int, numaCpuNum int) (Request, Request) {
+	cpuFull := req.FullCPUs()
+	cpuFraction := req.CPUFraction()
+	fractions := cpuFull*1000 + cpuFraction
+	cpus := fractions / 1000
+	if req.CPUType() != cpuNormal || cpus <= numaCpuNum || cpus > numaCpuNum+ccxCpuNum {
+		return req, nil
+	}
+
+	req1 := request{
+		container: req.(*request).container,
+		full:      req.(*request).full,
+		fraction:  req.(*request).fraction,
+		isolate:   req.(*request).isolate,
+		cpuType:   req.(*request).cpuType,
+		memReq:    req.(*request).memReq,
+		memLim:    req.(*request).memLim,
+		memType:   req.(*request).memType,
+		coldStart: req.(*request).coldStart,
+	}
+
+	part := fractions - numaCpuNum*1000
+	req.SetFullCPUs(0)
+	req.SetCPUFraction(numaCpuNum * 1000)
+	req1.full = 0
+	req1.fraction = part
+	return req, &req1
+}
+
 // newRequest creates a new request for the given container.
 func newRequest(container cache.Container) Request {
 	pod, _ := container.GetPod()
@@ -974,8 +1008,7 @@ func newRequest(container cache.Container) Request {
 		}
 	}
 
-	return &request{
-		container: container,
+	return &request{container: container,
 		full:      full,
 		fraction:  fraction,
 		isolate:   isolate,
@@ -1029,9 +1062,18 @@ func (cr *request) FullCPUs() int {
 	return cr.full
 }
 
+// SetFullCPUs set the full cpu
+func (cr *request) SetFullCPUs(cpus int) {
+	cr.full = cpus
+}
+
 // CPUFraction returns the amount of fractional milli-CPU requested.
 func (cr *request) CPUFraction() int {
 	return cr.fraction
+}
+
+func (cr *request) SetCPUFraction(n int) {
+	cr.fraction = n
 }
 
 // Isolate returns whether isolated CPUs are preferred for this request.
@@ -1108,9 +1150,11 @@ func (cs *supply) GetScore(req Request) Score {
 	}
 
 	// calculate colocation score
-	for _, grant := range cs.node.Policy().allocations.grants {
-		if cr.CPUType() == grant.CPUType() && grant.GetCPUNode().NodeID() == cs.node.NodeID() {
-			score.colocated++
+	for _, grants := range cs.node.Policy().allocations.grants {
+		for _, grant := range grants {
+			if cr.CPUType() == grant.CPUType() && grant.GetCPUNode().NodeID() == cs.node.NodeID() {
+				score.colocated++
+			}
 		}
 	}
 
@@ -1347,6 +1391,12 @@ func (cg *grant) SharedPortion() int {
 	return 0
 }
 
+func (cg *grant) SetSharedPortion(p int) {
+	if cg.cpuType == cpuNormal {
+		cg.cpuPortion = p
+	}
+}
+
 // ExclusiveCPUs returns the isolated exclusive CPUSet in this grant.
 func (cg *grant) IsolatedCPUs() cpuset.CPUSet {
 	return cg.node.GetSupply().IsolatedCPUs().Intersection(cg.exclusive)
@@ -1360,6 +1410,10 @@ func (cg *grant) MemoryType() memoryType {
 // Memset returns the granted memory controllers as an IDSet.
 func (cg *grant) Memset() idset.IDSet {
 	return cg.memset
+}
+
+func (cg *grant) SetMemset(m idset.IDSet) {
+	cg.memset = m
 }
 
 // MemLimit returns the granted memory.
@@ -1425,7 +1479,8 @@ func (cg *grant) AccountReleaseCPU() {
 func (cg *grant) RestoreMemset() {
 	mems := cg.GetMemoryNode().GetMemset(cg.memType)
 	cg.memset = mems
-	cg.GetMemoryNode().Policy().applyGrant(cg)
+	cgs := []Grant{cg}
+	cg.GetMemoryNode().Policy().applyGrant(cgs)
 }
 
 func (cg *grant) ExpandMemset() (bool, error) {
@@ -1479,7 +1534,8 @@ func (cg *grant) ExpandMemset() (bool, error) {
 
 	// Make the container to use the new memory set.
 	// FIXME: this could be done in a second pass to avoid doing this many times
-	cg.GetMemoryNode().Policy().applyGrant(cg)
+	cgs := []Grant{cg}
+	cg.GetMemoryNode().Policy().applyGrant(cgs)
 
 	return true, nil
 }
