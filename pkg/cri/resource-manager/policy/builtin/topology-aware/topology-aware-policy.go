@@ -160,21 +160,43 @@ func (p *policy) Sync(add []cache.Container, del []cache.Container) error {
 // AllocateResources is a resource allocation request for this policy.
 func (p *policy) AllocateResources(container cache.Container) error {
 	log.Debug("allocating resources for %s...", container.PrettyName())
+  ccxCpuNum := p.sys.Ccx(0).CPUSet().Size()
+  numaCpuNum := p.sys.Node(0).CPUSet().Size()
+  req := newRequest(container)
+  req0, req1 := resolveRequest(req, ccxCpuNum, numaCpuNum)
+  log.Info("-------- AllocateResources: ccxCpuNum: %v, numaCpuNum: %v", ccxCpuNum, numaCpuNum)
+  if req1 != nil {
+    log.Info("------- AllocateResources: req1.full: %v\n", req1.(*request).full)
+  }
+  if err:= container.SetCRIRequest(req0); err != nil {
+    return err
+  }
+  p.allocateResources(container)
+  if req1 != nil {
+    container.SetCRIRequest(req1)
+    if err := p.allocateResources(container); err != nil {
+      return err
+    }
+  }
 
-	grant, err := p.allocatePool(container, "")
-	if err != nil {
-		return policyError("failed to allocate resources for %s: %v",
-			container.PrettyName(), err)
-	}
+  return nil
+}
+
+func (p *policy) allocateResources(container cache.Container) error {
+  grant, err := p.allocatePool(container, "")
+  if err != nil {
+    return policyError("failed to allocate resources for %s: %v",
+      container.PrettyName(), err)
+  }
   if grant == nil {
     return nil
   }
-	p.applyGrant(grant)
-	p.updateSharedAllocations(&grant)
+  p.applyGrant(grant)
+  p.updateSharedAllocations(&grant)
 
-	p.root.Dump("<post-alloc>")
+  p.root.Dump("<post-alloc>")
 
-	return nil
+  return nil
 }
 
 // ReleaseResources is a resource release request for this policy.

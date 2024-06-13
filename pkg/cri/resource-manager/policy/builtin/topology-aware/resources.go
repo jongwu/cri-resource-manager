@@ -939,6 +939,26 @@ func (cs *supply) DumpMemoryState(prefix string) {
 	}
 }
 
+// resolveResource resolve cpu resource to 2 parts if necessary
+func resolveRequest(req Request, ccxCpuNum int, numaCpuNum int) (Request, Request) {
+  cpuFull := req.FullCPUs()
+
+  if req.CPUType() != cpuNormal || cpuFull <= ccxCpuNum  || cpuFull == numaCpuNum {
+    return req, nil
+  }
+
+  req1 := request{}
+  var full int
+  if cpuFull > numaCpuNum {
+    full = cpuFull - numaCpuNum
+  } else {
+    full = cpuFull - ccxCpuNum
+  }
+  req1.full = full
+  req1.cpuType = cpuNormal
+  return req, &req1
+}
+
 // newRequest creates a new request for the given container.
 func newRequest(container cache.Container) Request {
 	pod, _ := container.GetPod()
@@ -1027,6 +1047,11 @@ func (cr *request) SetCPUType(cpuType cpuClass) {
 // FullCPUs return the number of full CPUs requested.
 func (cr *request) FullCPUs() int {
 	return cr.full
+}
+
+// SetFullCPUs set the full cpu
+func (cr *request) SetFullCPUs(cpus int) {
+  cr.full = cpus
 }
 
 // CPUFraction returns the amount of fractional milli-CPU requested.
