@@ -949,7 +949,7 @@ func resolveRequest(req Request, ccxCpuNum int, numaCpuNum int) (Request, Reques
 	cpuFraction := req.CPUFraction()
 	fractions := cpuFull*1000 + cpuFraction
 	cpus := fractions / 1000
-	if req.CPUType() != cpuNormal || cpus <= numaCpuNum || cpus > numaCpuNum+ccxCpuNum {
+	if req.CPUType() != cpuNormal || cpus <= numaCpuNum || cpus > 2 * numaCpuNum {
 		return req, nil
 	}
 
