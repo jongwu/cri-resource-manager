@@ -62,6 +62,9 @@ func (p *policy) restoreAllocations(allocations *allocations) error {
 func (p *policy) reinstateGrants(grantss map[string][]Grant) error {
 	for id, grants := range grantss {
 		for _, grant := range grants {
+			if grant == nil {
+				continue
+			}
 			c := grant.GetContainer()
 
 			pool := grant.GetCPUNode()

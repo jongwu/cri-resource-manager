@@ -136,9 +136,9 @@ func (p *policy) buildPoolsByTopology() error {
 		if die, ok := numaDies[numaNodeID]; ok {
 			if p.parentNumaNodeCountWithCPUs(numaSysNode) < 2 {
 				numaSurrogates[numaNodeID] = die
-				log.Debug("        - omitted pool \"NUMA node #%d\": using surrogate %q",
-					numaNodeID, numaSurrogates[numaNodeID].Name())
-				continue
+					log.Debug("        - omitted pool \"NUMA node #%d\": using surrogate %q",
+							numaNodeID, numaSurrogates[numaNodeID].Name())
+					continue
 			}
 			numaNode = p.NewNumaNode(numaNodeID, die)
 		} else {
@@ -153,7 +153,7 @@ func (p *policy) buildPoolsByTopology() error {
 		}
 
 		p.nodes[numaNode.Name()] = numaNode
-		numaSurrogates[numaNodeID] = numaNode
+		numaSurrogates[numaNodeID] = numaNode		
 		log.Debug("        + created pool %q", numaNode.Parent().Name()+"/"+numaNode.Name())
 	}
 
@@ -343,6 +343,9 @@ func (p *policy) checkHWTopology() error {
 func (p *policy) allocatePool(container cache.Container, poolHint string, request Request) (Grant, error) {
 	var pool Node
 
+	if request == nil {
+		request = newRequest(container)
+	}
 	if p.root.FreeSupply().ReservedCPUs().IsEmpty() && request.CPUType() == cpuReserved {
 		// Fallback to allocating reserved CPUs from the shared pool
 		// if there are no reserved CPUs.
@@ -614,6 +617,9 @@ func (p *policy) applyGrant(grants []Grant) {
 	reserved := grants[0].ReservedCPUs()
 
 	for _, grant := range grants {
+		if grant == nil {
+			continue
+		}
 		cs := grant.SharedCPUs().List()
 		cset = append(cset, cs...)
 		cpuPortion += grant.SharedPortion()
@@ -649,6 +655,9 @@ func (p *policy) applyGrant(grants []Grant) {
 	mems := ""
 	if opt.PinMemory {
 		for _, grant := range grants {
+			if grant == nil {
+				continue
+			}
 			if mems != "" {
 				mems += ","
 			}
@@ -785,9 +794,13 @@ func (p *policy) setDemotionPreferences(c cache.Container, g Grant) {
 	}
 
 	tmpdram := g.GetMemoryNode().GetMemset(memoryDRAM).Members()
-	dram.Add(tmpdram...)
+	if tmpdram != nil && dram != nil {
+		dram.Add(tmpdram...)
+	}
 	tmppmem := g.GetMemoryNode().GetMemset(memoryPMEM).Members()
-	pmem.Add(tmppmem...)
+	if tmppmem != nil && dram != nil {
+		pmem.Add(tmppmem...)
+	}
 
 	log.Debug("%s: eligible for demotion from %s to %s NUMA node(s)",
 		c.PrettyName(), dram, pmem)

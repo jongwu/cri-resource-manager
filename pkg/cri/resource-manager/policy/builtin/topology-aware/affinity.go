@@ -47,6 +47,9 @@ func (p *policy) calculatePoolAffinities(container cache.Container) (map[int]int
 
 // Calculate affinity of this container (against all other containers).
 func (p *policy) calculateContainerAffinity(container cache.Container) (map[string]int32, error) {
+	if container == nil {
+		return nil, nil
+	}
 	log.Debug("* calculating affinity for container %s...", container.PrettyName())
 
 	ca, err := container.GetAffinity()

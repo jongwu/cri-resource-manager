@@ -57,7 +57,7 @@ type ResourceManager interface {
 	// SendEvent sends an event to be processed by the resource manager.
 	SendEvent(event interface{}) error
 	// Add-ons for testing.
-	ResourceManagerTestAPI
+	GetCache() cache.Cache
 }
 
 // resmgr is the implementation of ResourceManager.
@@ -230,6 +230,10 @@ func (m *resmgr) Stop() {
 func (m *resmgr) SetConfig(conf *config.RawConfig) error {
 	m.Info("applying new configuration from agent...")
 	return m.setConfig(conf)
+}
+
+func (m* resmgr) GetCache() cache.Cache {
+	return m.cache
 }
 
 // SetAdjustment pushes new external adjustments to the resource manager.

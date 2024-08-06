@@ -724,6 +724,9 @@ func (n *numanode) HintScore(hint topology.Hint) float64 {
 // NewCcxNode create a ccx for a numa node
 func (p *policy) NewCcxNode(id idset.ID, parent Node) Node {
 	n := &ccxnode{}
+	if parent == nil {
+		return n
+	}
 	n.self.node = n
 	n.node.init(p, fmt.Sprintf("CCX node #%v", id), CcxNode, parent)
 	n.id = id

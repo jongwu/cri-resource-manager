@@ -66,6 +66,10 @@ func (fake *mockSystemNode) CPUSet() cpuset.CPUSet {
 	return cpuset.New()
 }
 
+func (fake *mockSystemNode) CcxSet() idset.IDSet {
+	return idset.NewIDSet()
+}
+
 func (fake *mockSystemNode) Distance() []int {
 	if len(fake.distance) == 0 {
 		return []int{0}
@@ -108,10 +112,43 @@ func (p *mockCPUPackage) SstInfo() *sst.SstPackageInfo {
 	return &sst.SstPackageInfo{}
 }
 
+type mockCcx struct {
+	isolated cpuset.CPUSet
+	online   cpuset.CPUSet
+	id       idset.ID
+	node     mockSystemNode
+	pkg      mockCPUPackage
+}
+
+func (c *mockCcx) ID() idset.ID {
+        return idset.ID(0)
+}
+
+// PackageID returns the package id for this ccx.
+func (c *mockCcx) PackageID() idset.ID {
+        return idset.ID(0)
+}
+
+// DieID returns the die id for this ccx.
+func (c *mockCcx) DieID() idset.ID {
+        return idset.ID(0)
+}
+
+// NodeID return the numa id for this ccx.
+func (c *mockCcx) NodeID() idset.ID {
+        return idset.ID(0)
+}
+
+// CPUSet returns the CPUSet for all cores/threads in this ccx.
+func (c *mockCcx) CPUSet() cpuset.CPUSet {
+        return cpuset.New()
+}
+
 type mockCPU struct {
 	isolated cpuset.CPUSet
 	online   cpuset.CPUSet
 	id       idset.ID
+	ccx	 mockCcx
 	node     mockSystemNode
 	pkg      mockCPUPackage
 }
@@ -133,6 +170,9 @@ func (c *mockCPU) DieID() idset.ID {
 }
 func (c *mockCPU) NodeID() idset.ID {
 	return c.node.ID()
+}
+func (c *mockCPU) CcxID() idset.ID {
+	return idset.ID(0)
 }
 func (c *mockCPU) CoreID() idset.ID {
 	return c.id
@@ -172,6 +212,10 @@ func (fake *mockSystem) Node(id idset.ID) system.Node {
 		}
 	}
 	return &mockSystemNode{}
+}
+
+func (fake *mockSystem) Ccx(id idset.ID) system.Ccx {
+	return &mockCcx{}
 }
 
 func (fake *mockSystem) CPU(idset.ID) system.CPU {
@@ -237,6 +281,13 @@ func (fake *mockSystem) NodeIDs() []idset.ID {
 	ids := make([]idset.ID, len(fake.nodes))
 	for i, node := range fake.nodes {
 		ids[i] = node.ID()
+	}
+	return ids
+}
+func (fake *mockSystem) CcxIDs() []idset.ID {
+	ids := make([]idset.ID, len(fake.nodes))
+	for i, ccx := range fake.nodes {
+		ids[i] = ccx.ID()
 	}
 	return ids
 }

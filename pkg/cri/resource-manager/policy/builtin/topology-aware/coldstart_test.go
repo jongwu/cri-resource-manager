@@ -93,7 +93,7 @@ func TestColdStart(t *testing.T) {
 					returnValue2ForLookupContainer: true,
 				},
 				allocations: allocations{
-					grants: make(map[string]Grant, 0),
+					grants: make(map[string][]Grant, 0),
 				},
 				options: &policyapi.BackendOptions{},
 			}
@@ -104,7 +104,7 @@ func TestColdStart(t *testing.T) {
 				t.Errorf("failed to build topology pool")
 			}
 
-			grant, err := policy.allocatePool(tc.container, "")
+			grant, err := policy.allocatePool(tc.container, "", tc.req)
 			if err != nil {
 				panic(err)
 			}
@@ -112,7 +112,7 @@ func TestColdStart(t *testing.T) {
 				t.Errorf("Expected coldstart value '%v', but got '%v'", tc.expectedColdStartTimeout, grant.ColdStart())
 			}
 
-			policy.allocations.grants[tc.container.GetCacheID()] = grant
+			policy.allocations.grants[tc.container.GetCacheID()][0] = grant
 
 			mems := grant.Memset()
 			if len(mems) != 1 || mems.Members()[0] != tc.expectedPMEMSystemNodeID {

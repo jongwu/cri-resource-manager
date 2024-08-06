@@ -504,6 +504,9 @@ func (p *policy) configNotify(event config.Event, source config.Source) error {
 
 		for _, grants := range allocations.grants {
 			for _, grant := range grants {
+				if grant == nil {
+					continue
+				}
 				if err := grant.RefetchNodes(); err != nil {
 					*p = savedPolicy
 					return policyError("failed to reconfigure: %v", err)
@@ -632,6 +635,9 @@ func (a *allocations) clone() allocations {
 	gs := make([]Grant, len(a.grants))
 	for id, grants := range a.grants {
 		for i, grant := range grants {
+			if grant == nil {
+				continue
+			}
 			gs[i] = grant.Clone()
 		}
 		o.grants[id] = gs

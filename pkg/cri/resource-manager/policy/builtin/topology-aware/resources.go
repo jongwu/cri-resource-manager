@@ -1084,7 +1084,12 @@ func (cr *request) Isolate() bool {
 // MemAmountToAllocate retuns how much memory we need to reserve for a request.
 func (cr *request) MemAmountToAllocate() uint64 {
 	var amount uint64 = 0
-	switch cr.GetContainer().GetQOSClass() {
+	c := cr.GetContainer()
+	ply := v1.PodQOSBurstable
+	if c != nil {
+		ply = c.GetQOSClass()
+	}
+	switch ply {
 	case v1.PodQOSBurstable:
 		// May be a request and/or limit. We focus on the limit because we
 		// need to prepare for the case when all containers are using all
