@@ -199,7 +199,8 @@ func (a *allocations) UnmarshalJSON(data []byte) error {
 		for _, ccg := range ccgs {
 			grant, err := ccg.ToGrant(a.policy)
 			if err != nil {
-				return err
+				log.Error("removing unresolvable cached grant %v: %v", *ccg, err)
+				delete(a.grants, id)
 			}
 			a.grants[id] = append(a.grants[id], grant)
 			if err != nil {
