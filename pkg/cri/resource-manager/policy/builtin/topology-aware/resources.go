@@ -103,6 +103,10 @@ type Request interface {
 	SetCPUFraction(int)
 	// CPUFraction returns the amount of fractional milli-CPU requested.
 	CPUFraction() int
+	// PossibleCpus returns the possible cpus
+	PossibleCpusFraction() int
+	// GetCompanyNode returns the node granted to its companion request
+	GetCompanyNode() Node
 	// Isolate returns whether isolated CPUs are preferred for this request.
 	Isolate() bool
 	// MemoryType returns the type(s) of requested memory.
@@ -222,11 +226,13 @@ var _ Supply = &supply{}
 
 // request implements our Request interface.
 type request struct {
-	container cache.Container // container for this request
-	full      int             // number of full CPUs requested
-	fraction  int             // amount of fractional CPU requested
-	isolate   bool            // prefer isolated exclusive CPUs
-	cpuType   cpuClass        // preferred CPU type (normal, reserved)
+	container            cache.Container // container for this request
+	full                 int             // number of full CPUs requested
+	fraction             int             // amount of fractional CPU requested
+	possibleCpusFraction int             // the amount of cpu request in this "req" plus the acompanying one
+	companyNode          Node            // if it has an companion, record the node of its companion
+	isolate              bool            // prefer isolated exclusive CPUs
+	cpuType              cpuClass        // preferred CPU type (normal, reserved)
 
 	memReq  uint64     // memory request
 	memLim  uint64     // memory limit
@@ -246,6 +252,7 @@ var _ Request = &request{}
 type grant struct {
 	container      cache.Container // container CPU is granted to
 	node           Node            // node CPU is supplied from
+	companyNode    Node            // node granted to its companion request
 	memoryNode     Node            // node memory is supplied from
 	exclusive      cpuset.CPUSet   // exclusive CPUs
 	cpuType        cpuClass        // type of CPUs (normal, reserved, ...)
@@ -949,7 +956,7 @@ func resolveRequest(req Request, ccxCpuNum int, numaCpuNum int) (Request, Reques
 	cpuFraction := req.CPUFraction()
 	fractions := cpuFull*1000 + cpuFraction
 	cpus := fractions / 1000
-	if req.CPUType() != cpuNormal || cpus <= numaCpuNum || cpus > 2 * numaCpuNum {
+	if req.CPUType() != cpuNormal || cpus <= numaCpuNum || cpus > 2*numaCpuNum {
 		return req, nil
 	}
 
@@ -968,8 +975,10 @@ func resolveRequest(req Request, ccxCpuNum int, numaCpuNum int) (Request, Reques
 	part := fractions - numaCpuNum*1000
 	req.SetFullCPUs(0)
 	req.SetCPUFraction(numaCpuNum * 1000)
+	req.(*request).possibleCpusFraction = cpuFull*1000 + fractions
 	req1.full = 0
 	req1.fraction = part
+	req1.possibleCpusFraction = part
 	return req, &req1
 }
 
@@ -1070,6 +1079,16 @@ func (cr *request) SetFullCPUs(cpus int) {
 // CPUFraction returns the amount of fractional milli-CPU requested.
 func (cr *request) CPUFraction() int {
 	return cr.fraction
+}
+
+// PossibleCpus returns the possible Cpus
+func (cr *request) PossibleCpusFraction() int {
+	return cr.possibleCpusFraction
+}
+
+// GetCompanyNode returns the node granted to companion request
+func (cr *request) GetCompanyNode() Node {
+	return cr.companyNode
 }
 
 func (cr *request) SetCPUFraction(n int) {

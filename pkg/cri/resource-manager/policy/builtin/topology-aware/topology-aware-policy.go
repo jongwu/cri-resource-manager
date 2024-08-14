@@ -177,6 +177,7 @@ func (p *policy) AllocateResources(container cache.Container) error {
 
 	var grant1 Grant
 	if req1 != nil {
+		req1.(*request).companyNode = grant0.GetCPUNode()
 		grant1, err = p.allocateResources(container, req1)
 		if err != nil {
 			return err

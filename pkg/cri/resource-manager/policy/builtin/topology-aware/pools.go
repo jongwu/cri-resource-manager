@@ -136,9 +136,9 @@ func (p *policy) buildPoolsByTopology() error {
 		if die, ok := numaDies[numaNodeID]; ok {
 			if p.parentNumaNodeCountWithCPUs(numaSysNode) < 2 {
 				numaSurrogates[numaNodeID] = die
-					log.Debug("        - omitted pool \"NUMA node #%d\": using surrogate %q",
-							numaNodeID, numaSurrogates[numaNodeID].Name())
-					continue
+				log.Debug("        - omitted pool \"NUMA node #%d\": using surrogate %q",
+					numaNodeID, numaSurrogates[numaNodeID].Name())
+				continue
 			}
 			numaNode = p.NewNumaNode(numaNodeID, die)
 		} else {
@@ -153,7 +153,7 @@ func (p *policy) buildPoolsByTopology() error {
 		}
 
 		p.nodes[numaNode.Name()] = numaNode
-		numaSurrogates[numaNodeID] = numaNode		
+		numaSurrogates[numaNodeID] = numaNode
 		log.Debug("        + created pool %q", numaNode.Parent().Name()+"/"+numaNode.Name())
 	}
 
@@ -884,9 +884,29 @@ func (p *policy) sortPoolsByScore(req Request, aff map[int]int32) (map[int]Score
 func (p *policy) compareScores(request Request, pools []Node, scores map[int]Score,
 	affinity map[int]int32, i int, j int) bool {
 	node1, node2 := pools[i], pools[j]
+	parent1 := node1.Parent()
+	parent2 := node2.Parent()
+	possibleCpusFraction := request.PossibleCpusFraction()
+	fullCpus := request.FullCPUs()
+	cpuFrac := request.CPUFraction()
+	possibleCpusFraction -= fullCpus*1000 + cpuFrac
 	depth1, depth2 := node1.RootDistance(), node2.RootDistance()
 	id1, id2 := node1.NodeID(), node2.NodeID()
 	score1, score2 := scores[id1], scores[id2]
+	parentScore1, parentScore2 := scores[parent1.NodeID()], scores[parent2.NodeID()]
+	parentShared1 := -1
+	parentShared2 := -1
+	if parentScore1 != nil {
+		parentShared1 = parentScore1.SharedCapacity()
+	}
+	if parentScore2 != nil {
+		parentShared2 = parentScore2.SharedCapacity()
+	}
+	companyNode := request.GetCompanyNode()
+	var parentOfCompanyNode Node
+	if companyNode != nil {
+		parentOfCompanyNode = companyNode.Parent()
+	}
 	cpuType := request.CPUType()
 	isolated1, reserved1, shared1 := score1.IsolatedCapacity(), score1.ReservedCapacity(), score1.SharedCapacity()
 	isolated2, reserved2, shared2 := score2.IsolatedCapacity(), score2.ReservedCapacity(), score2.SharedCapacity()
@@ -904,7 +924,11 @@ func (p *policy) compareScores(request Request, pools []Node, scores map[int]Sco
 	//
 	// 1) - insufficient isolated, reserved or shared capacity loses
 	// 2) - if we have affinity, the higher affinity score wins
-	// 3) - if only one node matches the memory type request, it wins
+	// 3) - if we have one more requests, we should care about node whose parent can hold
+	//      the whole requests to ensure all of the requests grants to a smaller region.
+	//      * the node whose parent owns enough cpus wins
+	//      * if it has previous request, the node whose parent is the parent of node which
+	//        granted to the previous req wins
 	// 4) - if we have topology hints
 	//       * better hint score wins
 	//       * for a tie, prefer the lower node then the smaller id
@@ -955,18 +979,21 @@ func (p *policy) compareScores(request Request, pools []Node, scores map[int]Sco
 
 	log.Debug("  - affinity is a TIE")
 
-	// 3) matching memory type wins
-	if reqType := request.MemoryType(); reqType != memoryUnspec {
-		if node1.HasMemoryType(reqType) && !node2.HasMemoryType(reqType) {
-			log.Debug("  => %s WINS on memory type", node1.Name())
+	// 3) maching possible cpu wins
+	if parent1 != nil && parent2 != nil {
+		log.Debug(" - possible cpu compare: parent1.Name: %v, parent2.Name: %v, parentShared1: %v, parentShared2: %v, possibleCpus: %v", parent1.Name(), parent2.Name(), parentShared1, parentShared2, possibleCpusFraction)
+	}
+	if parent1 != nil && parent2 != nil && parentShared1 != -1 && parentShared2 != -1 {
+		if parentOfCompanyNode != nil && parentOfCompanyNode.NodeID() == parent1.NodeID() || parentShared1 >= possibleCpusFraction && parentShared2 < possibleCpusFraction {
+			log.Debug(" => %s WINS on possible Cpus", node1.Name())
 			return true
 		}
-		if !node1.HasMemoryType(reqType) && node2.HasMemoryType(reqType) {
-			log.Debug("  => %s WINS on memory type", node2.Name())
+		if parentOfCompanyNode != nil && parentOfCompanyNode.NodeID() == parent2.NodeID() || parentShared1 < possibleCpusFraction && parentShared2 >= possibleCpusFraction {
+			log.Debug(" => %s WINS on possible Cpus", node2.Name())
 			return false
 		}
 
-		log.Debug("  - memory type is a TIE")
+		log.Debug(" - possible cpus is a TIE")
 	}
 
 	// 4) better topology hint score wins
