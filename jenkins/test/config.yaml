@@ -1,0 +1,8 @@
+repository:
+  -
+    repo_name: cri-resource-manager
+    repo_branch: master
+
+steps:
+  - prepare.sh
+  - run.sh

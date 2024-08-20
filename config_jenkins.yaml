@@ -1,0 +1,4 @@
+crirm_testsuite_path:
+  tc_path: jenkins/test
+  build_script: build.sh
+  output_path: jenkins/output
