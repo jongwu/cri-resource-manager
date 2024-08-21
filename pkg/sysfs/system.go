@@ -638,9 +638,7 @@ func (sys *system) discoverCPU(path string) error {
 			return err
 		}
 		readSysfsEntry(path, "topology/die_id", &cpu.die)
-		if _, err := readSysfsEntry(path, "topology/core_id", &cpu.core); err != nil {
-			return err
-		}
+		cpu.core = cpu.id
 		if _, err := readSysfsEntry(path, "topology/thread_siblings_list", &cpu.threads, ","); err != nil {
 			return err
 		}
