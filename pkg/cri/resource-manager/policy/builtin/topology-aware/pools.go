@@ -831,7 +831,7 @@ func (p *policy) filterInsufficientResources(req Request, originals []Node) []No
 
 		required := req.MemAmountToAllocate()
 
-		for _, memType := range []memoryType{memoryPMEM, memoryDRAM, memoryHBM} {
+		for _, memType := range []memoryType{memoryDRAM} {
 			if reqMemType&memType != 0 {
 				extra := supply.ExtraMemoryReservation(memType)
 				free := supply.MemoryLimit()[memType]

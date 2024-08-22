@@ -159,7 +159,6 @@ func (p *policy) Sync(add []cache.Container, del []cache.Container) error {
 
 // AllocateResources is a resource allocation request for this policy.
 func (p *policy) AllocateResources(container cache.Container) error {
-	log.Debug("allocating resources for %s...", container.PrettyName())
 
 	ccxCpuNum := p.sys.Ccx(0).CPUSet().Size()
 	numaCpuNum := p.sys.Node(0).CPUSet().Size()

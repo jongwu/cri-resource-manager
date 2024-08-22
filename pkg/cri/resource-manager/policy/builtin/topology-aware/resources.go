@@ -149,7 +149,6 @@ type Grant interface {
 	SharedCPUs() cpuset.CPUSet
 	// SharedPortion returns the amount of CPUs in milli-CPU granted.
 	SharedPortion() int
-	SetSharedPortion(int)
 	// IsolatedCpus returns the exclusively granted isolated cpuset.
 	IsolatedCPUs() cpuset.CPUSet
 	// MemoryType returns the type(s) of granted memory.
@@ -1413,12 +1412,6 @@ func (cg *grant) SharedPortion() int {
 		return cg.cpuPortion
 	}
 	return 0
-}
-
-func (cg *grant) SetSharedPortion(p int) {
-	if cg.cpuType == cpuNormal {
-		cg.cpuPortion = p
-	}
 }
 
 // ExclusiveCPUs returns the isolated exclusive CPUSet in this grant.

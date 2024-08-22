@@ -114,7 +114,6 @@ type Node interface {
 	dump(string, ...int)
 
 	GetMemoryType() memoryType
-	HasMemoryType(memoryType) bool
 	GetPhysicalNodeIDs() []idset.ID
 
 	GetScore(Request) Score
@@ -519,7 +518,15 @@ func (n *node) discoverSupply(assignedNUMANodes []idset.ID) Supply {
 		}
 
 		cpus = cpus.Union(allowed)
-
+		numaId := ccx.NodeID()
+		numa := n.System().Node(numaId)
+		ccxNumPerNuma := len(numa.CcxSet())
+		meminfo, err := numa.MemoryInfo()
+		if err != nil {
+			log.Fatal("%s: failed to get memory info for NUMA node #%d", n.Name(), ccxId)
+		}
+		n.mem.Add(ccxId)
+		mmap.AddDRAM(meminfo.MemTotal / uint64(ccxNumPerNuma))
 		n.noderes = newSupply(n, isolated, reserved, sharable, 0, 0, mmap, nil)
 		log.Debug("  = %s", n.noderes.DumpCapacity())
 	}
@@ -640,11 +647,6 @@ func (n *node) GetMemoryType() memoryType {
 		memoryMask |= memoryHBM
 	}
 	return memoryMask
-}
-
-func (n *node) HasMemoryType(reqType memoryType) bool {
-	nodeType := n.GetMemoryType()
-	return (nodeType & reqType) == reqType
 }
 
 // NewNumaNode create a node for a CPU socket.

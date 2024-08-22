@@ -282,7 +282,6 @@ func TestMemoryLimitFiltering(t *testing.T) {
 
 func TestPoolCreation(t *testing.T) {
 
-	t.Skip("this test only for intel cpu")
 
 	// Test pool creation with "real" sysfs data.
 
@@ -294,7 +293,7 @@ func TestPoolCreation(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// Uncompress the test data to the directory.
-	err = utils.UncompressTbz2(path.Join("testdata", "sysfs.tar.bz2"), dir)
+	err = utils.UncompressTbz2(path.Join("testdata", "hygon.sysfs.tar.bz2"), dir)
 	if err != nil {
 		panic(err)
 	}
@@ -311,21 +310,7 @@ func TestPoolCreation(t *testing.T) {
 		// TODO: expectedRootNodeMemory   int
 	}{
 		{
-			path: path.Join(dir, "sysfs", "desktop", "sys"),
-			name: "sysfs pool creation from a desktop system",
-			req: &request{
-				memReq:    10000,
-				memLim:    10000,
-				memType:   memoryAll,
-				container: &mockContainer{},
-			},
-			expectedRemainingNodes:  []int{0},
-			expectedFirstNodeMemory: memoryDRAM,
-			expectedLeafNodeCPUs:    20,
-			expectedRootNodeCPUs:    20,
-		},
-		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "sysfs pool creation from a server system",
 			req: &request{
 				memReq:    10000,
@@ -333,38 +318,24 @@ func TestPoolCreation(t *testing.T) {
 				memType:   memoryDRAM,
 				container: &mockContainer{},
 			},
-			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6},
-			expectedFirstNodeMemory: memoryDRAM | memoryPMEM,
-			expectedLeafNodeCPUs:    28,
-			expectedRootNodeCPUs:    112,
+			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26},
+			expectedFirstNodeMemory: memoryDRAM,
+			expectedLeafNodeCPUs:    8,
+			expectedRootNodeCPUs:    128,
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "pmem request on a server system",
 			req: &request{
 				memReq:    10000,
 				memLim:    10000,
-				memType:   memoryDRAM | memoryPMEM,
+				memType:   memoryDRAM,
 				container: &mockContainer{},
 			},
-			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6},
-			expectedFirstNodeMemory: memoryDRAM | memoryPMEM,
-			expectedLeafNodeCPUs:    28,
-			expectedRootNodeCPUs:    112,
-		},
-		{
-			path: path.Join(dir, "sysfs", "4-socket-server-nosnc", "sys"),
-			name: "sysfs pool creation from a 4 socket server with SNC disabled",
-			req: &request{
-				memReq:    10000,
-				memLim:    10000,
-				memType:   memoryAll,
-				container: &mockContainer{},
-			},
-			expectedRemainingNodes:  []int{0, 1, 2, 3, 4},
+			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26},
 			expectedFirstNodeMemory: memoryDRAM,
-			expectedLeafNodeCPUs:    36,
-			expectedRootNodeCPUs:    36 * 4,
+			expectedLeafNodeCPUs:    8,
+			expectedRootNodeCPUs:    128,
 		},
 	}
 	for _, tc := range tcases {
@@ -434,7 +405,6 @@ func TestPoolCreation(t *testing.T) {
 
 func TestWorkloadPlacement(t *testing.T) {
 
-	t.Skip("this test only for intel cpu")
 
 	// Do some workloads (containers) and see how they are placed in the
 	// server system.
@@ -447,7 +417,7 @@ func TestWorkloadPlacement(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// Uncompress the test data to the directory.
-	err = utils.UncompressTbz2(path.Join("testdata", "sysfs.tar.bz2"), dir)
+	err = utils.UncompressTbz2(path.Join("testdata", "hygon.sysfs.tar.bz2"), dir)
 	if err != nil {
 		panic(err)
 	}
@@ -461,7 +431,7 @@ func TestWorkloadPlacement(t *testing.T) {
 		expectedLeafNode       bool
 	}{
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "workload placement on a server system leaf node",
 			req: &request{
 				memReq:  10000,
@@ -472,11 +442,11 @@ func TestWorkloadPlacement(t *testing.T) {
 
 				container: &mockContainer{},
 			},
-			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6},
-			expectedLeafNode:       true,
+			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26},
+			expectedLeafNode:       false,
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "workload placement on a server system root node: CPUs don't fit to leaf",
 			req: &request{
 				memReq:    10000,
@@ -486,11 +456,11 @@ func TestWorkloadPlacement(t *testing.T) {
 				full:      29,
 				container: &mockContainer{},
 			},
-			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6},
+			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26},
 			expectedLeafNode:       false,
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "workload placement on a server system root node: memory doesn't fit to leaf",
 			req: &request{
 				memReq:    190000000000,
@@ -500,7 +470,7 @@ func TestWorkloadPlacement(t *testing.T) {
 				full:      28,
 				container: &mockContainer{},
 			},
-			expectedRemainingNodes: []int{2, 6},
+			expectedRemainingNodes: []int{25, 12, 26},
 			expectedLeafNode:       false,
 		},
 	}
@@ -552,8 +522,6 @@ func TestWorkloadPlacement(t *testing.T) {
 
 func TestContainerMove(t *testing.T) {
 
-	t.Skip("this test only for intel cpu")
-
 	// In case there's not enough memory to guarantee that the
 	// containers running on child nodes won't get OOM killed, they need
 	// to be moved upwards in the tree.
@@ -566,7 +534,7 @@ func TestContainerMove(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// Uncompress the test data to the directory.
-	err = utils.UncompressTbz2(path.Join("testdata", "sysfs.tar.bz2"), dir)
+	err = utils.UncompressTbz2(path.Join("testdata", "hygon.sysfs.tar.bz2"), dir)
 	if err != nil {
 		panic(err)
 	}
@@ -586,7 +554,7 @@ func TestContainerMove(t *testing.T) {
 		expectedChangeForContainer3   bool
 	}{
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "workload placement on a server system leaf node",
 			container1: &mockContainer{
 				returnValueForGetResourceRequirements: v1.ResourceRequirements{
@@ -620,7 +588,7 @@ func TestContainerMove(t *testing.T) {
 			expectedLeafNodeForContainer3: true,
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "workload placement on a server system non-leaf node",
 			container1: &mockContainer{
 				name: "c1",
@@ -678,23 +646,23 @@ func TestContainerMove(t *testing.T) {
 			policy := CreateTopologyAwarePolicy(policyOptions).(*policy)
 			log.EnableDebug(false)
 
-			grant1, err := policy.allocatePool(tc.container1, "", &request{})
+			grant1, err := policy.allocatePool(tc.container1, "", nil)
 			if err != nil {
 				panic(err)
 			}
-			fmt.Printf("grant 1 memsets: dram %s, pmem %s\n", grant1.GetMemoryNode().GetMemset(memoryDRAM), grant1.GetMemoryNode().GetMemset(memoryPMEM))
+			fmt.Printf("grant 1 memsets: dram %s\n", grant1.GetMemoryNode().GetMemset(memoryDRAM))
 
-			grant2, err := policy.allocatePool(tc.container2, "", &request{})
+			grant2, err := policy.allocatePool(tc.container2, "", nil)
 			if err != nil {
 				panic(err)
 			}
-			fmt.Printf("grant 2 memsets: dram %s, pmem %s\n", grant2.GetMemoryNode().GetMemset(memoryDRAM), grant2.GetMemoryNode().GetMemset(memoryPMEM))
+			fmt.Printf("grant 2 memsets: dram %s\n", grant2.GetMemoryNode().GetMemset(memoryDRAM))
 
-			grant3, err := policy.allocatePool(tc.container3, "", &request{})
+			grant3, err := policy.allocatePool(tc.container3, "", nil)
 			if err != nil {
 				panic(err)
 			}
-			fmt.Printf("grant 3 memsets: dram %s, pmem %s\n", grant3.GetMemoryNode().GetMemset(memoryDRAM), grant3.GetMemoryNode().GetMemset(memoryPMEM))
+			fmt.Printf("grant 3 memsets: dram %s\n", grant3.GetMemoryNode().GetMemset(memoryDRAM))
 
 			if (grant1.GetCPUNode().IsSameNode(grant1.GetMemoryNode())) && tc.expectedChangeForContainer1 {
 				t.Errorf("Workload 1 should have been relocated: %t, node: %s", tc.expectedChangeForContainer1, grant1.GetMemoryNode().Name())
@@ -724,7 +692,6 @@ func TestAffinities(t *testing.T) {
 	// Test how (already pre-calculated) affinities affect workload placement.
 	//
 
-	t.Skip("this test only for intel cpu")
 	// Create a temporary directory for the test data.
 	dir, err := os.MkdirTemp("", "cri-resource-manager-test-sysfs-")
 	if err != nil {
@@ -733,7 +700,7 @@ func TestAffinities(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// Uncompress the test data to the directory.
-	err = utils.UncompressTbz2(path.Join("testdata", "sysfs.tar.bz2"), dir)
+	err = utils.UncompressTbz2(path.Join("testdata", "hygon.sysfs.tar.bz2"), dir)
 	if err != nil {
 		panic(err)
 	}
@@ -746,7 +713,7 @@ func TestAffinities(t *testing.T) {
 		expected   string
 	}{
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "no affinities",
 			req: &request{
 				memReq:    10000,
@@ -757,10 +724,10 @@ func TestAffinities(t *testing.T) {
 				container: &mockContainer{},
 			},
 			affinities: map[string]int32{},
-			expected:   "NUMA node #2",
+			expected:   "CCX node #1",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "reserved - no affinities",
 			req: &request{
 				cpuType:   cpuReserved,
@@ -772,10 +739,10 @@ func TestAffinities(t *testing.T) {
 				container: &mockContainer{},
 			},
 			affinities: map[string]int32{},
-			expected:   "NUMA node #0",
+			expected:   "CCX node #0",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "affinity to NUMA node #1",
 			req: &request{
 				memReq:    10000,
@@ -791,7 +758,7 @@ func TestAffinities(t *testing.T) {
 			expected: "NUMA node #1",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "affinity to socket #1",
 			req: &request{
 				memReq:    10000,
@@ -807,7 +774,7 @@ func TestAffinities(t *testing.T) {
 			expected: "socket #1",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "equal affinities to NUMA node #1, socket #1",
 			req: &request{
 				memReq:    10000,
@@ -821,10 +788,10 @@ func TestAffinities(t *testing.T) {
 				"socket #1":    1,
 				"NUMA node #1": 1,
 			},
-			expected: "NUMA node #1",
+			expected: "root",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "equal affinities to NUMA node #1, NUMA node #3",
 			req: &request{
 				memReq:    10000,
@@ -838,10 +805,10 @@ func TestAffinities(t *testing.T) {
 				"NUMA node #1": 1,
 				"NUMA node #3": 1,
 			},
-			expected: "socket #1",
+			expected: "socket #0",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "double affinity to NUMA node #1 vs. #3",
 			req: &request{
 				memReq:    10000,
@@ -855,10 +822,10 @@ func TestAffinities(t *testing.T) {
 				"NUMA node #1": 2,
 				"NUMA node #3": 1,
 			},
-			expected: "socket #1",
+			expected: "socket #0",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "triple affinity to NUMA node #1 vs. #3",
 			req: &request{
 				memReq:    10000,
@@ -875,7 +842,7 @@ func TestAffinities(t *testing.T) {
 			expected: "NUMA node #1",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "double affinity to NUMA node #0,#3 vs. socket #1",
 			req: &request{
 				memReq:    10000,
@@ -890,10 +857,10 @@ func TestAffinities(t *testing.T) {
 				"NUMA node #3": 2,
 				"socket #1":    1,
 			},
-			expected: "root",
+			expected: "socket #0",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "equal affinity to NUMA node #0,#3 vs. socket #1",
 			req: &request{
 				memReq:    10000,
@@ -911,7 +878,7 @@ func TestAffinities(t *testing.T) {
 			expected: "root",
 		},
 		{
-			path: path.Join(dir, "sysfs", "server", "sys"),
+			path: path.Join(dir, "sys"),
 			name: "half the affinity to NUMA node #0,#3 vs. socket #1",
 			req: &request{
 				memReq:    10000,
@@ -926,7 +893,7 @@ func TestAffinities(t *testing.T) {
 				"NUMA node #3": 1,
 				"socket #1":    2,
 			},
-			expected: "socket #1",
+			expected: "root",
 		},
 	}
 
