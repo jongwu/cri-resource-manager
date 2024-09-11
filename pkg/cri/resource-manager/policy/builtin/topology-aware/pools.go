@@ -985,12 +985,16 @@ func (p *policy) compareScores(request Request, pools []Node, scores map[int]Sco
 	}
 	if parent1 != nil && parent2 != nil && parentShared1 != -1 && parentShared2 != -1 {
 		if parentOfCompanyNode != nil && parentOfCompanyNode.NodeID() == parent1.NodeID() || parentShared1 >= possibleCpusFraction && parentShared2 < possibleCpusFraction {
-			log.Debug(" => %s WINS on possible Cpus", node1.Name())
-			return true
+			if node1.Kind() != "ccx" && node2.Kind() != "ccx" {
+				log.Debug(" => %s WINS on possible Cpus", node1.Name())
+				return true
+			}
 		}
 		if parentOfCompanyNode != nil && parentOfCompanyNode.NodeID() == parent2.NodeID() || parentShared1 < possibleCpusFraction && parentShared2 >= possibleCpusFraction {
-			log.Debug(" => %s WINS on possible Cpus", node2.Name())
-			return false
+			if node1.Kind() != "ccx" && node2.Kind() != "ccx" {
+				log.Debug(" => %s WINS on possible Cpus", node2.Name())
+				return false
+			}
 		}
 
 		log.Debug(" - possible cpus is a TIE")
