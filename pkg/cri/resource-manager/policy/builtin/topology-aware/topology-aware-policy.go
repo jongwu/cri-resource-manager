@@ -632,13 +632,13 @@ func (p *policy) newAllocations() allocations {
 // clone creates a copy of the allocation.
 func (a *allocations) clone() allocations {
 	o := allocations{policy: a.policy, grants: make(map[string][]Grant)}
-	gs := make([]Grant, len(a.grants))
 	for id, grants := range a.grants {
-		for i, grant := range grants {
+		gs := make([]Grant, 0)
+		for _, grant := range grants {
 			if grant == nil {
 				continue
 			}
-			gs[i] = grant.Clone()
+			gs = append(gs, grant.Clone())
 		}
 		o.grants[id] = gs
 	}
